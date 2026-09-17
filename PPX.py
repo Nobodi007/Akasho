@@ -1,3 +1,4 @@
+import re
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -8,8 +9,18 @@ import streamlit.components.v1 as components
 # =========================================================
 # PAGE CONFIG & THEME
 # =========================================================
-st.set_page_config(page_title="XSpring Dealer Suite", layout="wide",
+st.set_page_config(page_title="XSpring Dealer Suite", page_icon="♻️", layout="wide",
                    initial_sidebar_state="expanded")
+
+# --- FIX #4: รองรับทั้ง Streamlit เก่า/ใหม่ (use_container_width ถูก deprecate ที่ 1.49) ---
+def _sv_tuple():
+    try:
+        nums = re.findall(r"\d+", st.__version__)
+        return (int(nums[0]), int(nums[1]))
+    except Exception:
+        return (1, 40)
+
+WIDE = {"width": "stretch"} if _sv_tuple() >= (1, 49) else {"use_container_width": True}
 
 st.markdown("""
 <style>
@@ -122,50 +133,72 @@ def calc_thb_withdrawal_fee(amount_thb: float, bank_type: str) -> float:
     return 20.0 if amount_thb <= 2_000_000 else 70.0
 
 
+# --- FIX #2: รอจนกล่องมีความสูงจริงก่อนวาด (แท็บที่ซ่อนอยู่ = height 0 -> กราฟค้างเปล่า) ---
 def render_tradingview(symbol: str, container_id: str, height: int = 500,
                        interval: str = "D", studies=None):
     """ฝังกราฟ TradingView — container_id ต้องไม่ซ้ำกันในหน้าเดียว"""
-    studies = studies or []
-    studies_js = str(studies).replace("'", '"')
+    studies_js = str(studies or []).replace("'", '"')
     components.html(f"""
-    <div class="tradingview-widget-container" style="height:{height}px;width:100%;">
-      <div id="{container_id}" style="height:100%;width:100%;"></div>
-    </div>
+    <div id="{container_id}" style="height:{height}px;width:100%;"></div>
     <script src="https://s3.tradingview.com/tv.js"></script>
     <script>
-      new TradingView.widget({{
-        "container_id": "{container_id}",
-        "symbol": "{symbol}",
-        "interval": "{interval}",
-        "timezone": "Asia/Bangkok",
-        "theme": "dark",
-        "style": "1",
-        "locale": "th_TH",
-        "autosize": true,
-        "toolbar_bg": "#0E1117",
-        "enable_publishing": false,
-        "hide_side_toolbar": false,
-        "allow_symbol_change": true,
-        "studies": {studies_js},
-        "overrides": {{
-          "paneProperties.background": "#0E1117",
-          "paneProperties.backgroundType": "solid",
-          "paneProperties.vertGridProperties.color": "#1f2937",
-          "paneProperties.horzGridProperties.color": "#1f2937",
-          "mainSeriesProperties.candleStyle.upColor": "#00D26A",
-          "mainSeriesProperties.candleStyle.downColor": "#FF4B4B",
-          "mainSeriesProperties.candleStyle.borderUpColor": "#00D26A",
-          "mainSeriesProperties.candleStyle.borderDownColor": "#FF4B4B",
-          "mainSeriesProperties.candleStyle.wickUpColor": "#00D26A",
-          "mainSeriesProperties.candleStyle.wickDownColor": "#FF4B4B"
+      (function draw() {{
+        var el = document.getElementById("{container_id}");
+        if (!el || el.offsetHeight === 0 || typeof TradingView === "undefined") {{
+          return setTimeout(draw, 300);
         }}
-      }});
+        new TradingView.widget({{
+          "container_id": "{container_id}",
+          "symbol": "{symbol}",
+          "interval": "{interval}",
+          "timezone": "Asia/Bangkok",
+          "theme": "dark",
+          "style": "1",
+          "locale": "th_TH",
+          "width": "100%",
+          "height": {height},
+          "toolbar_bg": "#0E1117",
+          "enable_publishing": false,
+          "hide_side_toolbar": false,
+          "allow_symbol_change": true,
+          "studies": {studies_js},
+          "overrides": {{
+            "paneProperties.background": "#0E1117",
+            "paneProperties.backgroundType": "solid",
+            "paneProperties.vertGridProperties.color": "#1f2937",
+            "paneProperties.horzGridProperties.color": "#1f2937",
+            "mainSeriesProperties.candleStyle.upColor": "#00D26A",
+            "mainSeriesProperties.candleStyle.downColor": "#FF4B4B",
+            "mainSeriesProperties.candleStyle.borderUpColor": "#00D26A",
+            "mainSeriesProperties.candleStyle.borderDownColor": "#FF4B4B",
+            "mainSeriesProperties.candleStyle.wickUpColor": "#00D26A",
+            "mainSeriesProperties.candleStyle.wickDownColor": "#FF4B4B"
+          }}
+        }});
+      }})();
     </script>""", height=height + 8)
+
+
+@st.cache_data(show_spinner=False)
+def to_csv_bytes(df: pd.DataFrame) -> bytes:
+    return df.to_csv().encode("utf-8-sig")
 
 
 # =========================================================
 # DATA LAYER
 # =========================================================
+def _normalize_index(d: pd.DataFrame) -> pd.DataFrame:
+    """FIX #5: yfinance บางเวอร์ชันคืน index tz-aware บ้าง naive บ้าง -> reindex ไม่ match"""
+    idx = pd.to_datetime(d.index)
+    try:
+        if getattr(idx, "tz", None) is not None:
+            idx = idx.tz_convert(None)
+    except (TypeError, AttributeError):
+        pass
+    d.index = idx.normalize()
+    return d
+
+
 @st.cache_data(ttl=3600, show_spinner="กำลังโหลดข้อมูลราคาย้อนหลัง…")
 def fetch_price_data(ticker, start, end):
     try:
@@ -183,6 +216,10 @@ def fetch_price_data(ticker, start, end):
         if isinstance(d.columns, pd.MultiIndex):
             d.columns = d.columns.get_level_values(0)
 
+    raw, fx_raw = _normalize_index(raw), _normalize_index(fx_raw)
+    raw = raw[~raw.index.duplicated(keep="last")]
+    fx_raw = fx_raw[~fx_raw.index.duplicated(keep="last")]
+
     df = raw[["Close", "High", "Low"]].copy()
     df.columns = ["Global_USD", "Day_High", "Day_Low"]
     # FIX: คริปโตเทรด 7 วัน / FX เทรด 5 วัน -> ffill แทนการ dropna ทิ้งเสาร์-อาทิตย์
@@ -195,7 +232,7 @@ def fetch_price_data(ticker, start, end):
 
 
 def apply_fx_limit(hedge_usd: pd.Series, index: pd.DatetimeIndex, fx_limit: float):
-    """FIX: วันที่ถูกบล็อก = ไม่กินโควตา + รีเซ็ตทุกต้นเดือน"""
+    """วันที่ถูกบล็อก = ไม่กินโควตา + รีเซ็ตทุกต้นเดือน"""
     allowed, usage, used, cur_month = [], [], 0.0, None
     for ts, cost in zip(index, hedge_usd.values):
         m = ts.to_period("M")
@@ -211,7 +248,7 @@ def apply_fx_limit(hedge_usd: pd.Series, index: pd.DatetimeIndex, fx_limit: floa
 
 
 # =========================================================
-# SIDEBAR (อยู่นอก tab — Streamlit render sidebar เสมอ)
+# SIDEBAR
 # =========================================================
 with st.sidebar:
     st.markdown("### ⚙️ Backtest Settings")
@@ -257,7 +294,6 @@ with st.sidebar:
 
         st.caption(f"ช่วงที่เลือก: {start_date} → {end_date} ({(end_date - start_date).days} วัน)")
 
-    # FIX: ไม่ใช้ st.stop() เพราะจะฆ่า tab2 ทิ้งด้วย
     dates_ok = start_date < end_date
     if not dates_ok:
         st.error("❌ วันเริ่มต้นต้องอยู่ก่อนวันสิ้นสุด")
@@ -275,7 +311,8 @@ with st.sidebar:
             st.session_state.bt_prev_gx = global_exchange
 
         hedge_fee = st.number_input("ค่าธรรมเนียม Global CEX (%)", key="bt_hedge_fee", step=0.01) / 100
-        fx_limit_max = st.number_input("FX Limit ต่อเดือน (USD)", value=5000000, step=500000, key="bt_fx_limit")
+        fx_limit_max = st.number_input("FX Limit ต่อเดือน (USD)", value=5000000, step=500000,
+                                       min_value=1, key="bt_fx_limit")
         local_premium = st.number_input(
             "Local Premium/Discount ฝั่งไทย (%)", value=0.1, step=0.1, key="bt_local_premium",
             help="ส่วนต่างราคากระดานไทยเทียบราคาโลก ค่าเริ่มต้น 0.1% สะท้อนพรีเมียมที่มักพบช่วงตลาดปกติ") / 100
@@ -323,7 +360,7 @@ with tab1:
         data = data.copy()
         data["Local_THB"] = data["Global_USD"] * data["USDTHB"] * (1 + local_premium)
 
-        # ---------- P&L ENGINE (แยก notional ออกจาก revenue) ----------
+        # ---------- P&L ENGINE ----------
         data["Coin_Volume"] = trade_vol / data["Global_USD"]
         data["Gross_Notional_THB"] = data["Coin_Volume"] * data["Local_THB"]
         data["Spread_Revenue_THB"] = data["Gross_Notional_THB"] * dealer_spread
@@ -351,7 +388,6 @@ with tab1:
         wd_network_cost = wd_fee_per_coin * data["Global_USD"] * data["USDTHB"] * settlements_per_day
         data["Withdrawal_Fee_Markup_Revenue_THB"] = wd_network_cost * withdrawal_fee_markup_pct
 
-        # FIX: คิดค่าธรรมเนียมบาทราย row ไม่ใช้ค่าเฉลี่ยทั้งช่วง (look-ahead bias)
         data["THB_WD_Fee"] = data["USDTHB"].map(lambda fx: calc_thb_withdrawal_fee(trade_vol * fx, bank_type))
         data["THB_Fee_Markup_Revenue_THB"] = (data["THB_WD_Fee"] * settlements_per_day
                                               * withdrawal_fee_markup_pct)
@@ -386,10 +422,13 @@ with tab1:
         win_rate = win_days / traded_days * 100 if traded_days else 0
         avg_daily_pnl = traded["Daily_PnL_THB"].mean() if traded_days else 0
         best_day, worst_day = data["Actual_Daily_PnL"].max(), data["Actual_Daily_PnL"].min()
+
         running_max = data["Actual_Cum_PnL"].cummax()
         max_drawdown = (data["Actual_Cum_PnL"] - running_max).min()
-        dd_pct = (max_drawdown / running_max.replace(0, np.nan)).min() * 100
-        dd_pct = 0 if pd.isna(dd_pct) else dd_pct
+        # FIX #3: คิด drawdown % เทียบ peak ของ "วันเดียวกัน" ไม่ใช่เอา scalar หารทั้ง Series
+        dd_series = (data["Actual_Cum_PnL"] - running_max) / running_max.where(running_max > 0)
+        dd_pct = dd_series.min() * 100
+        dd_pct = 0.0 if pd.isna(dd_pct) else dd_pct
 
         st.success(f"✅ โหลดข้อมูล **{asset}** ช่วง {start_date} → {end_date} สำเร็จ "
                    f"({total_days} วัน | เทรดได้จริง {traded_days} วัน)")
@@ -415,6 +454,7 @@ with tab1:
                 render_tradingview(global_sym, "tv_cmp_global", 420)
             st.info(f"💡 ใช้เทียบว่า **Local Premium {local_premium*100:.2f}%** ที่ตั้งไว้ใกล้ความจริงแค่ไหน — "
                     f"หารด้วยเรท USD/THB ปัจจุบัน (~{data['USDTHB'].iloc[-1]:.2f}) แล้วเทียบกับราคาโลกได้เลย")
+        st.caption("หมายเหตุ: บางคู่บนกระดานไทยอาจไม่มีฟีดบน TradingView — พิมพ์เปลี่ยนสัญลักษณ์ในกราฟได้โดยตรง")
 
         # ---------- KPI ----------
         section("📈 Performance Summary")
@@ -438,13 +478,14 @@ with tab1:
         r3 = st.columns(4)
         metric_card(r3[0], "Gross Notional หมุนเวียน", fmt_baht(total_notional), None, "มูลค่าธุรกรรมรวม (ไม่ใช่กำไร)")
         metric_card(r3[1], "FX Limit Hit", f"{limit_hit_days} วัน",
-                    -1 if limit_hit_days else 0, f"{limit_hit_days/total_days*100:.1f}% ของช่วงเวลา")
+                    -1 if limit_hit_days else 0,
+                    f"{(limit_hit_days/total_days*100) if total_days else 0:.1f}% ของช่วงเวลา")
         if asset in STABLECOINS:
-            metric_card(r3[2], f"Avg Depeg Deviation", f"{data['Depeg_Deviation'].mean()*100:+.3f}%")
+            metric_card(r3[2], "Avg Depeg Deviation", f"{data['Depeg_Deviation'].mean()*100:+.3f}%")
             metric_card(r3[3], "Total Carry Yield", fmt_baht(traded["Carry_Yield_THB"].sum()),
                         traded["Carry_Yield_THB"].sum())
         else:
-            metric_card(r3[2], f"Avg Daily Volatility", f"{data['Volatility_Pct'].mean()*100:.2f}%")
+            metric_card(r3[2], "Avg Daily Volatility", f"{data['Volatility_Pct'].mean()*100:.2f}%")
             metric_card(r3[3], "Total Slippage Cost", fmt_baht(traded["Slippage_Cost_THB"].sum()),
                         -abs(traded["Slippage_Cost_THB"].sum()))
 
@@ -462,19 +503,21 @@ with tab1:
         wf_labels += ["Hedge Fee Cost", "Net P&L"]
         wf_values += [-traded["Hedge_Fee_Cost_THB"].sum(), 0]
 
+        # FIX #6: measure "total" ไม่ใช้ค่า y -> ใส่ text เองเพื่อไม่ให้แท่งสุดท้ายโชว์ 0
+        wf_text = [fmt_baht(v, True) for v in wf_values[:-1]] + [fmt_baht(sum(wf_values[:-1]), True)]
+
         fig_wf = go.Figure(go.Waterfall(
             orientation="v",
             measure=["relative"] * (len(wf_labels) - 1) + ["total"],
-            x=wf_labels, y=wf_values,
+            x=wf_labels, y=wf_values, text=wf_text, textposition="outside",
             connector={"line": {"color": "#374151"}},
             increasing={"marker": {"color": "#00D26A"}},
             decreasing={"marker": {"color": "#FF4B4B"}},
             totals={"marker": {"color": "#3B82F6"}},
-            texttemplate="%{y:,.0f}", textposition="outside",
         ))
-        fig_wf.update_layout(template="plotly_dark", height=420, showlegend=False,
-                             margin=dict(t=30, b=20), yaxis_title="THB")
-        st.plotly_chart(fig_wf, use_container_width=True)
+        fig_wf.update_layout(template="plotly_dark", height=440, showlegend=False,
+                             margin=dict(t=40, b=20), yaxis_title="THB")
+        st.plotly_chart(fig_wf, **WIDE)
 
         # ---------- CUMULATIVE P&L ----------
         section("📊 Cumulative P&L")
@@ -492,18 +535,18 @@ with tab1:
                           template="plotly_dark", hovermode="x unified", height=480,
                           margin=dict(t=50, b=20), yaxis_title="THB",
                           legend=dict(orientation="h", y=1.02, yanchor="bottom"))
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, **WIDE)
 
         # ---------- MONTHLY HEATMAP ----------
         with st.expander("📅 P&L รายเดือน"):
             m = data.groupby([data.index.year, data.index.month])["Actual_Daily_PnL"].sum().unstack(fill_value=0)
             m.columns = [f"{c:02d}" for c in m.columns]
-            fig_hm = go.Figure(go.Heatmap(z=m.values, x=m.columns, y=[str(i) for i in m.index],
+            fig_hm = go.Figure(go.Heatmap(z=m.values, x=list(m.columns), y=[str(i) for i in m.index],
                                           colorscale=[[0, "#FF4B4B"], [0.5, "#111827"], [1, "#00D26A"]],
                                           zmid=0, texttemplate="%{z:,.0f}", textfont={"size": 9}))
             fig_hm.update_layout(template="plotly_dark", height=60 * len(m) + 120,
                                  margin=dict(t=20, b=20), xaxis_title="เดือน", yaxis_title="ปี")
-            st.plotly_chart(fig_hm, use_container_width=True)
+            st.plotly_chart(fig_hm, **WIDE)
 
         # ---------- FEE BREAKDOWN ----------
         with st.expander("💳 สรุปรายได้ค่าธรรมเนียมกระดานไทย"):
@@ -527,10 +570,10 @@ with tab1:
             if asset in STABLECOINS:
                 cols += ["Depeg_Deviation", "Depeg_PnL_THB", "Carry_Yield_THB"]
             cols += ["Actual_Daily_PnL", "Current_FX_Usage", "FX_Limit_Hit"]
-            st.dataframe(data[cols].sort_index(ascending=False).head(100),
-                         use_container_width=True, height=400)
+            ledger = data[cols]
+            st.dataframe(ledger.sort_index(ascending=False).head(100), height=400, **WIDE)
             st.download_button("⬇️ ดาวน์โหลด Ledger ทั้งหมด (CSV)",
-                               data[cols].to_csv().encode("utf-8-sig"),
+                               to_csv_bytes(ledger),
                                f"xspring_ledger_{asset}_{start_date}_{end_date}.csv", "text/csv")
 
 
@@ -549,7 +592,6 @@ with tab2:
         st.session_state.logs.insert(0, msg)
         del st.session_state.logs[6:]
 
-    # ---- callbacks: มิวเทต state ก่อน rerun -> ไม่ต้องใช้ st.rerun() (กราฟ TV ไม่กระพริบ) ----
     def cb_customer_sells(amount):
         if st.session_state.ktb_fiat >= amount:
             st.session_state.ktb_fiat -= amount
@@ -606,21 +648,20 @@ with tab2:
             st.selectbox("ธนาคารปลายทางถอนบาท", ["SCB", "ธนาคารอื่น"], key="td_bank_type",
                          help="SCB คงที่ 20 บาท | ธนาคารอื่น 20 บาท (≤2M) หรือ 70 บาท (>2M)")
         with fc2:
-            st.number_input("เรทอ้างอิง USD/THB", value=35.5, step=0.1, key="td_usdthb_rate")
+            st.number_input("เรทอ้างอิง USD/THB", value=35.5, step=0.1, min_value=0.01, key="td_usdthb_rate")
         st.caption(f"ค่าธรรมเนียมถอน USDT คงที่ {WITHDRAWAL_FEE_TABLE['USDT']} USDT/ครั้ง · "
                    f"ค่าธรรมเนียมกระดานโลกเป็นต้นทุนจริงเพราะเราไม่ได้เป็นเจ้าของ")
 
-    # ---- Live market context ----
     section("📡 Market Context (Live)")
     td_sym = st.selectbox("คู่เหรียญที่ต้องการมอนิเตอร์", list(TV_LOCAL_SYMBOL.values()),
                           index=list(TV_LOCAL_SYMBOL.keys()).index("USDT"), key="td_tv_symbol")
     render_tradingview(td_sym, "tv_desk", 420, interval="60")
 
-    # ---- Balance sheet ----
     section("💼 Balance Sheet")
     penalty = (st.session_state.crypto_pool / 100_000) * 5
     ncr_score = max(0, 100 - penalty)
-    fx_percent = st.session_state.fx_used / st.session_state.fx_limit
+    fx_limit_val = max(st.session_state.fx_limit, 1)
+    fx_percent = st.session_state.fx_used / fx_limit_val
 
     b1, b2, b3 = st.columns(3)
     with b1:
@@ -663,19 +704,19 @@ with tab2:
     k1, k2, k3, k4 = st.columns(4)
     with k1:
         st.markdown("**สถานการณ์ตลาด**")
-        st.button("🔴 ลูกค้าแห่เทขาย 500K USDT", use_container_width=True, key="td_sell",
-                  on_click=cb_customer_sells, args=(500_000,))
+        st.button("🔴 ลูกค้าแห่เทขาย 500K USDT", key="td_sell",
+                  on_click=cb_customer_sells, args=(500_000,), **WIDE)
     with k2:
         st.markdown("**Treasury โอนเงิน**")
-        st.button(f"💸 โอนไป {td_global_exchange} 1M USD", use_container_width=True, key="td_transfer",
-                  on_click=cb_back_to_back, args=(1_000_000, td_global_exchange))
+        st.button(f"💸 โอนไป {td_global_exchange} 1M USD", key="td_transfer",
+                  on_click=cb_back_to_back, args=(1_000_000, td_global_exchange), **WIDE)
     with k3:
         st.markdown("**กลยุทธ์แก้เกม**")
-        st.button("🌉 Liquidity Bridge กลับ KTB 500K", type="primary", use_container_width=True,
-                  key="td_bridge", on_click=cb_bridge, args=(500_000,))
+        st.button("🌉 Liquidity Bridge กลับ KTB 500K", type="primary",
+                  key="td_bridge", on_click=cb_bridge, args=(500_000,), **WIDE)
     with k4:
         st.markdown("**จัดการเกม**")
-        st.button("🔄 Reset Desk", use_container_width=True, key="td_reset", on_click=cb_reset)
+        st.button("🔄 Reset Desk", key="td_reset", on_click=cb_reset, **WIDE)
 
     section("📝 Transaction Logs")
     if st.session_state.logs:
