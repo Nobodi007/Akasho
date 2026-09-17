@@ -55,11 +55,11 @@ st.markdown("""
 st.markdown("""
 <div class="xs-hero">
   <h1>🏦 XSpring — Digital Asset Dealer Suite</h1>
-  <p>Backtest 5 ปีย้อนหลัง + Trading Desk แบบ Interactive พร้อมกราฟ TradingView เรียลไทม์</p>
+  <p>Backtest 5 ปีย้อนหลัง + Liquidity &amp; Capital Planner พร้อมกราฟ TradingView เรียลไทม์</p>
   <span class="xs-pill">Back-to-Back Hedging</span>
   <span class="xs-pill">FX Limit Engine</span>
-  <span class="xs-pill">NCR Monitor</span>
-  <span class="xs-pill">Live TradingView</span>
+  <span class="xs-pill">NCR Capital Planner</span>
+  <span class="xs-pill">Multi-Asset Risk</span>
 </div>
 """, unsafe_allow_html=True)
 
@@ -89,6 +89,8 @@ TV_LOCAL_SYMBOL = {
 TV_GLOBAL_SYMBOL = {a: f"BINANCE:{a}USDT" for a in SUPPORTED_ASSETS}
 TV_GLOBAL_SYMBOL["USDT"] = "BINANCE:USDTTRY"
 TV_GLOBAL_SYMBOL["USDC"] = "BINANCE:USDCUSDT"
+
+Z_SCORE_MAP = {90: 1.2816, 95: 1.645, 99: 2.326, 99.9: 3.09}
 
 
 # =========================================================
@@ -131,6 +133,22 @@ def calc_thb_withdrawal_fee(amount_thb: float, bank_type: str) -> float:
     if bank_type == "SCB":
         return 20.0
     return 20.0 if amount_thb <= 2_000_000 else 70.0
+
+
+def verdict_box(ok: bool, title: str, detail: str, warn: bool = False):
+    """กล่องสรุปผล ✅/⚠️/🚨 ใช้ทั่วทั้งแอปสำหรับสื่อสารผลเชิงเกณฑ์"""
+    if warn and ok:
+        bg, bd, ic = "rgba(245,158,11,.10)", "#F59E0B", "⚠️"
+    elif ok:
+        bg, bd, ic = "rgba(0,210,106,.10)", "#00D26A", "✅"
+    else:
+        bg, bd, ic = "rgba(255,75,75,.10)", "#FF4B4B", "🚨"
+    st.markdown(
+        f"<div style='background:{bg};border-left:4px solid {bd};border-radius:8px;"
+        f"padding:12px 16px;margin-bottom:10px;'>"
+        f"<div style='font-weight:700;color:{bd};font-size:.95rem;'>{ic} {title}</div>"
+        f"<div style='color:#D1D5DB;font-size:.84rem;margin-top:4px;'>{detail}</div></div>",
+        unsafe_allow_html=True)
 
 
 # --- FIX #2: รอจนกล่องมีความสูงจริงก่อนวาด (แท็บที่ซ่อนอยู่ = height 0 -> กราฟค้างเปล่า) ---
@@ -248,11 +266,40 @@ def apply_fx_limit(hedge_usd: pd.Series, index: pd.DatetimeIndex, fx_limit: floa
 
 
 # =========================================================
+# RISK ENGINE (ใช้ร่วมกันทั้งโหมด Single-Asset และ Multi-Asset)
+# =========================================================
+def _risk_stats(r: pd.Series) -> dict | None:
+    """คำนวณสถิติความเสี่ยงจาก log-return series (ใช้ได้ทั้งเหรียญเดี่ยวและพอร์ต)"""
+    r = r.replace([np.inf, -np.inf], np.nan).dropna()
+    if len(r) < 30:
+        return None
+    q01 = np.percentile(r, 1)
+    q05 = np.percentile(r, 5)
+    tail = r[r <= q01]
+    return {
+        "returns": r,
+        "sigma_d": float(r.std()),
+        "ann_vol": float(r.std() * np.sqrt(365)),
+        "var95": float(max(-q05, 0)),
+        "var99": float(max(-q01, 0)),
+        "es99": float(max(-tail.mean(), 0)) if len(tail) else float(max(-q01, 0)),
+        "worst": float(max(-r.min(), 0)),
+        "worst_date": r.idxmin(),
+    }
+
+
+def risk_profile(px: pd.Series) -> dict | None:
+    """สกัดพารามิเตอร์ความเสี่ยงจากราคาจริงย้อนหลังของเหรียญเดียว"""
+    r = np.log(px / px.shift(1))
+    return _risk_stats(r)
+
+
+# =========================================================
 # SIDEBAR
 # =========================================================
 with st.sidebar:
     st.markdown("### ⚙️ Backtest Settings")
-    st.caption("ตั้งค่าสำหรับแท็บ **5-Year Backtest** — แท็บ Trading Desk ตั้งค่าในหน้าแท็บเอง")
+    st.caption("ใช้ร่วมกันทั้งแท็บ **5-Year Backtest** และโหมด Single-Asset ของ **Capital Planner**")
 
     asset = st.selectbox("เลือกเหรียญ", SUPPORTED_ASSETS, key="bt_asset")
     if asset in STABLECOINS:
@@ -343,90 +390,93 @@ with st.sidebar:
         peg_target, depeg_capture_pct, carry_apy = 1.0, 0.0, 0.0
 
 
+# ===== โหลดข้อมูลครั้งเดียว ใช้ร่วมกันทั้ง Backtest และ Capital Planner =====
+data, data_err = (pd.DataFrame(), "ช่วงวันที่ไม่ถูกต้อง") if not dates_ok \
+                 else fetch_price_data(asset, start_date, end_date)
+
+
 # =========================================================
 # TABS
 # =========================================================
-tab1, tab2 = st.tabs(["📊 5-Year Backtest Simulator", "🕹️ Live Trading Desk Simulator"])
+tab1, tab2 = st.tabs(["📊 5-Year Backtest Simulator", "🧮 Liquidity & Capital Planner"])
 
 # ---------------------------------------------------------
-# TAB 1
+# TAB 1 — BACKTEST
 # ---------------------------------------------------------
 with tab1:
-    data, err = (pd.DataFrame(), "ช่วงวันที่ไม่ถูกต้อง") if not dates_ok else fetch_price_data(asset, start_date, end_date)
-
     if data.empty:
-        st.error(f"⚠️ {err or 'ไม่สามารถโหลดข้อมูลได้'} — ลองเปลี่ยนช่วงวันที่หรือตรวจสอบการเชื่อมต่ออินเทอร์เน็ต")
+        st.error(f"⚠️ {data_err or 'ไม่สามารถโหลดข้อมูลได้'} — ลองเปลี่ยนช่วงวันที่หรือตรวจสอบการเชื่อมต่ออินเทอร์เน็ต")
     else:
-        data = data.copy()
-        data["Local_THB"] = data["Global_USD"] * data["USDTHB"] * (1 + local_premium)
+        bt = data.copy()
+        bt["Local_THB"] = bt["Global_USD"] * bt["USDTHB"] * (1 + local_premium)
 
         # ---------- P&L ENGINE ----------
-        data["Coin_Volume"] = trade_vol / data["Global_USD"]
-        data["Gross_Notional_THB"] = data["Coin_Volume"] * data["Local_THB"]
-        data["Spread_Revenue_THB"] = data["Gross_Notional_THB"] * dealer_spread
-        data["FX_Basis_PnL_THB"] = trade_vol * data["USDTHB"] * local_premium
-        data["Hedge_Fee_Cost_THB"] = trade_vol * hedge_fee * data["USDTHB"]
-        data["Hedge_Notional_USD"] = trade_vol * (1 + hedge_fee)
+        bt["Coin_Volume"] = trade_vol / bt["Global_USD"]
+        bt["Gross_Notional_THB"] = bt["Coin_Volume"] * bt["Local_THB"]
+        bt["Spread_Revenue_THB"] = bt["Gross_Notional_THB"] * dealer_spread
+        bt["FX_Basis_PnL_THB"] = trade_vol * bt["USDTHB"] * local_premium
+        bt["Hedge_Fee_Cost_THB"] = trade_vol * hedge_fee * bt["USDTHB"]
+        bt["Hedge_Notional_USD"] = trade_vol * (1 + hedge_fee)
 
         if asset in STABLECOINS:
-            data["Depeg_Deviation"] = peg_target - data["Global_USD"]
-            data["Depeg_PnL_THB"] = (data["Coin_Volume"] * data["Depeg_Deviation"]
-                                     * data["USDTHB"] * depeg_capture_pct)
-            data["Carry_Yield_THB"] = trade_vol * (carry_apy / 365) * data["USDTHB"]
-            data["Slippage_Cost_THB"] = 0.0
+            bt["Depeg_Deviation"] = peg_target - bt["Global_USD"]
+            bt["Depeg_PnL_THB"] = (bt["Coin_Volume"] * bt["Depeg_Deviation"]
+                                     * bt["USDTHB"] * depeg_capture_pct)
+            bt["Carry_Yield_THB"] = trade_vol * (carry_apy / 365) * bt["USDTHB"]
+            bt["Slippage_Cost_THB"] = 0.0
         else:
-            data["Depeg_Deviation"] = 0.0
-            data["Depeg_PnL_THB"] = 0.0
-            data["Carry_Yield_THB"] = 0.0
-            data["Slippage_Cost_THB"] = (trade_vol * data["Volatility_Pct"]
-                                         * slippage_sensitivity * data["USDTHB"])
+            bt["Depeg_Deviation"] = 0.0
+            bt["Depeg_PnL_THB"] = 0.0
+            bt["Carry_Yield_THB"] = 0.0
+            bt["Slippage_Cost_THB"] = (trade_vol * bt["Volatility_Pct"]
+                                         * slippage_sensitivity * bt["USDTHB"])
 
-        data["Trading_Fee_Revenue_THB"] = (data["Gross_Notional_THB"] * LOCAL_TRADING_FEE_PCT
+        bt["Trading_Fee_Revenue_THB"] = (bt["Gross_Notional_THB"] * LOCAL_TRADING_FEE_PCT
                                            if include_trading_fee_revenue else 0.0)
 
         wd_fee_per_coin = WITHDRAWAL_FEE_TABLE.get(asset, 0.0)
-        wd_network_cost = wd_fee_per_coin * data["Global_USD"] * data["USDTHB"] * settlements_per_day
-        data["Withdrawal_Fee_Markup_Revenue_THB"] = wd_network_cost * withdrawal_fee_markup_pct
+        wd_network_cost = wd_fee_per_coin * bt["Global_USD"] * bt["USDTHB"] * settlements_per_day
+        bt["Withdrawal_Fee_Markup_Revenue_THB"] = wd_network_cost * withdrawal_fee_markup_pct
 
-        data["THB_WD_Fee"] = data["USDTHB"].map(lambda fx: calc_thb_withdrawal_fee(trade_vol * fx, bank_type))
-        data["THB_Fee_Markup_Revenue_THB"] = (data["THB_WD_Fee"] * settlements_per_day
+        bt["THB_WD_Fee"] = bt["USDTHB"].map(lambda fx: calc_thb_withdrawal_fee(trade_vol * fx, bank_type))
+        bt["THB_Fee_Markup_Revenue_THB"] = (bt["THB_WD_Fee"] * settlements_per_day
                                               * withdrawal_fee_markup_pct)
 
-        data["Fee_Revenue_THB"] = (data["Trading_Fee_Revenue_THB"]
-                                   + data["Withdrawal_Fee_Markup_Revenue_THB"]
-                                   + data["THB_Fee_Markup_Revenue_THB"])
+        bt["Fee_Revenue_THB"] = (bt["Trading_Fee_Revenue_THB"]
+                                   + bt["Withdrawal_Fee_Markup_Revenue_THB"]
+                                   + bt["THB_Fee_Markup_Revenue_THB"])
 
-        data["Revenue_THB"] = (data["Spread_Revenue_THB"] + data["FX_Basis_PnL_THB"]
-                               + data["Fee_Revenue_THB"] + data["Depeg_PnL_THB"] + data["Carry_Yield_THB"])
-        data["Cost_THB"] = data["Hedge_Fee_Cost_THB"] + data["Slippage_Cost_THB"]
-        data["Daily_PnL_THB"] = data["Revenue_THB"] - data["Cost_THB"]
+        bt["Revenue_THB"] = (bt["Spread_Revenue_THB"] + bt["FX_Basis_PnL_THB"]
+                               + bt["Fee_Revenue_THB"] + bt["Depeg_PnL_THB"] + bt["Carry_Yield_THB"])
+        bt["Cost_THB"] = bt["Hedge_Fee_Cost_THB"] + bt["Slippage_Cost_THB"]
+        bt["Daily_PnL_THB"] = bt["Revenue_THB"] - bt["Cost_THB"]
 
         # ---------- FX LIMIT ----------
-        allowed, usage = apply_fx_limit(data["Hedge_Notional_USD"], data.index, fx_limit_max)
-        data["Trade_Allowed"], data["Current_FX_Usage"] = allowed, usage
-        data["FX_Limit_Hit"] = 1 - allowed
-        data["Actual_Daily_PnL"] = np.where(allowed == 1, data["Daily_PnL_THB"], 0.0)
-        data["Actual_Cum_PnL"] = data["Actual_Daily_PnL"].cumsum()
+        allowed, usage = apply_fx_limit(bt["Hedge_Notional_USD"], bt.index, fx_limit_max)
+        bt["Trade_Allowed"], bt["Current_FX_Usage"] = allowed, usage
+        bt["FX_Limit_Hit"] = 1 - allowed
+        bt["Actual_Daily_PnL"] = np.where(allowed == 1, bt["Daily_PnL_THB"], 0.0)
+        bt["Actual_Cum_PnL"] = bt["Actual_Daily_PnL"].cumsum()
 
         # ---------- STATS ----------
-        traded = data[data["Trade_Allowed"] == 1]
+        traded = bt[bt["Trade_Allowed"] == 1]
         total_revenue_thb = traded["Revenue_THB"].sum()
         total_cost_thb = traded["Cost_THB"].sum()
-        net_pnl_thb = data["Actual_Cum_PnL"].iloc[-1]
+        net_pnl_thb = bt["Actual_Cum_PnL"].iloc[-1]
         total_notional = traded["Gross_Notional_THB"].sum()
         margin_bps = (net_pnl_thb / total_notional * 10000) if total_notional else 0
 
-        total_days, traded_days = len(data), int(allowed.sum())
-        limit_hit_days = int(data["FX_Limit_Hit"].sum())
-        win_days = int((data["Actual_Daily_PnL"] > 0).sum())
+        total_days, traded_days = len(bt), int(allowed.sum())
+        limit_hit_days = int(bt["FX_Limit_Hit"].sum())
+        win_days = int((bt["Actual_Daily_PnL"] > 0).sum())
         win_rate = win_days / traded_days * 100 if traded_days else 0
         avg_daily_pnl = traded["Daily_PnL_THB"].mean() if traded_days else 0
-        best_day, worst_day = data["Actual_Daily_PnL"].max(), data["Actual_Daily_PnL"].min()
+        best_day, worst_day = bt["Actual_Daily_PnL"].max(), bt["Actual_Daily_PnL"].min()
 
-        running_max = data["Actual_Cum_PnL"].cummax()
-        max_drawdown = (data["Actual_Cum_PnL"] - running_max).min()
+        running_max = bt["Actual_Cum_PnL"].cummax()
+        max_drawdown = (bt["Actual_Cum_PnL"] - running_max).min()
         # FIX #3: คิด drawdown % เทียบ peak ของ "วันเดียวกัน" ไม่ใช่เอา scalar หารทั้ง Series
-        dd_series = (data["Actual_Cum_PnL"] - running_max) / running_max.where(running_max > 0)
+        dd_series = (bt["Actual_Cum_PnL"] - running_max) / running_max.where(running_max > 0)
         dd_pct = dd_series.min() * 100
         dd_pct = 0.0 if pd.isna(dd_pct) else dd_pct
 
@@ -453,7 +503,7 @@ with tab1:
                 st.caption(f"🌐 ราคาโลก — `{global_sym}`")
                 render_tradingview(global_sym, "tv_cmp_global", 420)
             st.info(f"💡 ใช้เทียบว่า **Local Premium {local_premium*100:.2f}%** ที่ตั้งไว้ใกล้ความจริงแค่ไหน — "
-                    f"หารด้วยเรท USD/THB ปัจจุบัน (~{data['USDTHB'].iloc[-1]:.2f}) แล้วเทียบกับราคาโลกได้เลย")
+                    f"หารด้วยเรท USD/THB ปัจจุบัน (~{bt['USDTHB'].iloc[-1]:.2f}) แล้วเทียบกับราคาโลกได้เลย")
         st.caption("หมายเหตุ: บางคู่บนกระดานไทยอาจไม่มีฟีดบน TradingView — พิมพ์เปลี่ยนสัญลักษณ์ในกราฟได้โดยตรง")
 
         # ---------- KPI ----------
@@ -481,11 +531,11 @@ with tab1:
                     -1 if limit_hit_days else 0,
                     f"{(limit_hit_days/total_days*100) if total_days else 0:.1f}% ของช่วงเวลา")
         if asset in STABLECOINS:
-            metric_card(r3[2], "Avg Depeg Deviation", f"{data['Depeg_Deviation'].mean()*100:+.3f}%")
+            metric_card(r3[2], "Avg Depeg Deviation", f"{bt['Depeg_Deviation'].mean()*100:+.3f}%")
             metric_card(r3[3], "Total Carry Yield", fmt_baht(traded["Carry_Yield_THB"].sum()),
                         traded["Carry_Yield_THB"].sum())
         else:
-            metric_card(r3[2], "Avg Daily Volatility", f"{data['Volatility_Pct'].mean()*100:.2f}%")
+            metric_card(r3[2], "Avg Daily Volatility", f"{bt['Volatility_Pct'].mean()*100:.2f}%")
             metric_card(r3[3], "Total Slippage Cost", fmt_baht(traded["Slippage_Cost_THB"].sum()),
                         -abs(traded["Slippage_Cost_THB"].sum()))
 
@@ -522,12 +572,12 @@ with tab1:
         # ---------- CUMULATIVE P&L ----------
         section("📊 Cumulative P&L")
         fig = go.Figure()
-        fig.add_trace(go.Scatter(x=data.index, y=data["Actual_Cum_PnL"], name="Cumulative P&L",
+        fig.add_trace(go.Scatter(x=bt.index, y=bt["Actual_Cum_PnL"], name="Cumulative P&L",
                                  line=dict(color="#00D26A", width=2.2),
                                  fill="tozeroy", fillcolor="rgba(0,210,106,0.12)"))
-        fig.add_trace(go.Scatter(x=data.index, y=running_max, name="Peak Equity",
+        fig.add_trace(go.Scatter(x=bt.index, y=running_max, name="Peak Equity",
                                  line=dict(color="#6B7280", width=1, dash="dot")))
-        hits = data[data["FX_Limit_Hit"] == 1]
+        hits = bt[bt["FX_Limit_Hit"] == 1]
         if not hits.empty:
             fig.add_trace(go.Scatter(x=hits.index, y=hits["Actual_Cum_PnL"], mode="markers",
                                      name="FX Limit Hit", marker=dict(color="#FF4B4B", size=5, symbol="x")))
@@ -539,7 +589,7 @@ with tab1:
 
         # ---------- MONTHLY HEATMAP ----------
         with st.expander("📅 P&L รายเดือน"):
-            m = data.groupby([data.index.year, data.index.month])["Actual_Daily_PnL"].sum().unstack(fill_value=0)
+            m = bt.groupby([bt.index.year, bt.index.month])["Actual_Daily_PnL"].sum().unstack(fill_value=0)
             m.columns = [f"{c:02d}" for c in m.columns]
             fig_hm = go.Figure(go.Heatmap(z=m.values, x=list(m.columns), y=[str(i) for i in m.index],
                                           colorscale=[[0, "#FF4B4B"], [0.5, "#111827"], [1, "#00D26A"]],
@@ -570,7 +620,7 @@ with tab1:
             if asset in STABLECOINS:
                 cols += ["Depeg_Deviation", "Depeg_PnL_THB", "Carry_Yield_THB"]
             cols += ["Actual_Daily_PnL", "Current_FX_Usage", "FX_Limit_Hit"]
-            ledger = data[cols]
+            ledger = bt[cols]
             st.dataframe(ledger.sort_index(ascending=False).head(100), height=400, **WIDE)
             st.download_button("⬇️ ดาวน์โหลด Ledger ทั้งหมด (CSV)",
                                to_csv_bytes(ledger),
@@ -578,151 +628,335 @@ with tab1:
 
 
 # ---------------------------------------------------------
-# TAB 2
+# TAB 2 — LIQUIDITY & CAPITAL PLANNER (ใหม่ทั้งหมด)
 # ---------------------------------------------------------
 with tab2:
-    st.markdown("สวมบทบาททีม Treasury บริหารสภาพคล่องให้รอดจาก **NCR** และ **FX Limit** "
-                "โดยหักค่าธรรมเนียมจริงตาม Fee Schedule ของกระดานไทยและกระดานโลก")
+    st.markdown("""
+ตอบคำถามที่ผู้บริหารถามจริง:
 
-    if "ktb_fiat" not in st.session_state:
-        st.session_state.update(ktb_fiat=5_000_000, crypto_pool=0, cex_margin=1_000_000,
-                                fx_used=0, fx_limit=3_000_000, logs=[])
+> **"ถ้าธุรกรรมเดือนละ X ล้าน ต้องดำรงเหรียญเท่าไหร่ เงินสดเท่าไหร่ NCR เหลือเท่าไหร่ ผ่านเกณฑ์ไหม และทุนที่มีรับได้สูงสุดกี่ล้าน"**
 
-    def add_log(msg):
-        st.session_state.logs.insert(0, msg)
-        del st.session_state.logs[6:]
+โดยดึงค่า Volatility / VaR / Expected Shortfall จาก **ราคาจริงย้อนหลัง** (ช่วงเวลาเดียวกับที่ตั้งไว้ในแถบซ้าย)
+    """)
 
-    def cb_customer_sells(amount):
-        if st.session_state.ktb_fiat >= amount:
-            st.session_state.ktb_fiat -= amount
-            st.session_state.crypto_pool += amount
-            add_log(f"🔴 ลูกค้าเทขาย {amount:,.0f} USDT → เงินสดลด, คริปโตเต็มพอร์ต (ระวัง NCR ร่วง!)")
-        else:
-            add_log("❌ ล้มเหลว: เงินสด (Fiat) ไม่พอจ่ายลูกค้า!")
-
-    def cb_back_to_back(amount, venue):
-        fee_pct = GLOBAL_EXCHANGE_FEE_PRESET[venue] / 100
-        total_cost = amount * (1 + fee_pct)
-        if st.session_state.fx_used + amount > st.session_state.fx_limit:
-            add_log("❌ ล้มเหลว: FX Limit เต็มเพดาน! ไม่สามารถโอนเงินออกได้")
-        elif st.session_state.ktb_fiat >= total_cost:
-            st.session_state.ktb_fiat -= total_cost
-            st.session_state.cex_margin += amount
-            st.session_state.fx_used += amount
-            add_log(f"🌐 โอนเข้า {venue} {amount:,.0f} USD "
-                    f"(ค่าธรรมเนียม {fee_pct*100:.2f}% = ${total_cost-amount:,.2f} | กินโควตา FX)")
-        else:
-            add_log("❌ ล้มเหลว: เงินสดไม่พอโอน (รวมค่าธรรมเนียมกระดานโลกแล้ว)")
-
-    def cb_bridge(amount):
-        wd_fee_coin = WITHDRAWAL_FEE_TABLE["USDT"]
-        rate = st.session_state.get("td_usdthb_rate", 35.5)
-        bank = st.session_state.get("td_bank_type", "SCB")
-        thb_fee = calc_thb_withdrawal_fee(amount * rate, bank)
-        total_fee_usd = wd_fee_coin + thb_fee / rate
-        if st.session_state.crypto_pool >= amount:
-            st.session_state.crypto_pool -= amount
-            net = amount - total_fee_usd
-            st.session_state.ktb_fiat += net
-            add_log(f"✅ Liquidity Bridge: ดึงกลับ KTB {amount:,.0f} USD "
-                    f"(เหรียญ {wd_fee_coin} USDT + THB ฿{thb_fee:,.0f} ≈ ${total_fee_usd:,.2f} | "
-                    f"สุทธิ ${net:,.2f} · NCR ฟื้น — หมายเหตุ: โควตา FX ที่ใช้ไปแล้วไม่คืน)")
-        else:
-            add_log("❌ ล้มเหลว: ไม่มีคริปโตให้แปลงกลับ")
-
-    def cb_reset():
-        st.session_state.update(ktb_fiat=5_000_000, crypto_pool=0, cex_margin=1_000_000,
-                                fx_used=0, logs=["🔄 รีเซ็ตสถานะเดสก์เรียบร้อย"])
-
-    c_a, c_b = st.columns([1, 2])
-    with c_a:
-        td_global_exchange = st.selectbox("🌐 กระดานโลก (Back-to-Back Venue)",
-                                          list(GLOBAL_EXCHANGE_FEE_PRESET.keys()), key="td_global_exchange")
-    with c_b:
-        st.caption(f"ทุกครั้งที่โอนเงินออก ระบบบันทึกว่าใช้ **{td_global_exchange}** "
-                   f"ในการ hedge (ค่าธรรมเนียม {GLOBAL_EXCHANGE_FEE_PRESET[td_global_exchange]}%)")
-
-    with st.expander("⚙️ ตั้งค่า Fee Schedule จริง"):
-        fc1, fc2 = st.columns(2)
-        with fc1:
-            st.selectbox("ธนาคารปลายทางถอนบาท", ["SCB", "ธนาคารอื่น"], key="td_bank_type",
-                         help="SCB คงที่ 20 บาท | ธนาคารอื่น 20 บาท (≤2M) หรือ 70 บาท (>2M)")
-        with fc2:
-            st.number_input("เรทอ้างอิง USD/THB", value=35.5, step=0.1, min_value=0.01, key="td_usdthb_rate")
-        st.caption(f"ค่าธรรมเนียมถอน USDT คงที่ {WITHDRAWAL_FEE_TABLE['USDT']} USDT/ครั้ง · "
-                   f"ค่าธรรมเนียมกระดานโลกเป็นต้นทุนจริงเพราะเราไม่ได้เป็นเจ้าของ")
-
-    section("📡 Market Context (Live)")
-    td_sym = st.selectbox("คู่เหรียญที่ต้องการมอนิเตอร์", list(TV_LOCAL_SYMBOL.values()),
-                          index=list(TV_LOCAL_SYMBOL.keys()).index("USDT"), key="td_tv_symbol")
-    render_tradingview(td_sym, "tv_desk", 420, interval="60")
-
-    section("💼 Balance Sheet")
-    penalty = (st.session_state.crypto_pool / 100_000) * 5
-    ncr_score = max(0, 100 - penalty)
-    fx_limit_val = max(st.session_state.fx_limit, 1)
-    fx_percent = st.session_state.fx_used / fx_limit_val
-
-    b1, b2, b3 = st.columns(3)
-    with b1:
-        with st.container(border=True):
-            st.info("🏦 1. Fiat Pool (KTB Bank)")
-            colored_metric("เงินสดพักรับดอกเบี้ย (USD)", f"$ {st.session_state.ktb_fiat:,.0f}",
-                           st.session_state.ktb_fiat, "สภาพคล่องความเสี่ยงต่ำ")
-    with b2:
-        with st.container(border=True):
-            st.warning("🪙 2. Crypto Pool (Inventory)")
-            colored_metric("เหรียญที่ดองไว้ (USDT)", f"₮ {st.session_state.crypto_pool:,.0f}",
-                           -st.session_state.crypto_pool if st.session_state.crypto_pool else 0,
-                           "⚠️ เงินจม: เสียโอกาส + โดนหัก NCR")
-    with b3:
-        with st.container(border=True):
-            st.success(f"🌐 3. Working Capital ({td_global_exchange})")
-            colored_metric("เงินทุนบนกระดานโลก (USD)", f"$ {st.session_state.cex_margin:,.0f}",
-                           st.session_state.cex_margin,
-                           f"ค่าธรรมเนียมโอนเข้า {GLOBAL_EXCHANGE_FEE_PRESET[td_global_exchange]}%/ครั้ง")
-
-    section("⚖️ Regulatory & Position Limits")
-    l1, l2 = st.columns(2)
-    with l1:
-        st.write(f"**FX Limit (โควตาโอนข้ามประเทศ)** — {fx_percent*100:.1f}% "
-                 f"(${st.session_state.fx_used:,.0f} / ${st.session_state.fx_limit:,.0f})")
-        st.progress(min(fx_percent, 1.0))
-        if fx_percent >= 1.0:
-            st.error("🚨 เพดาน FX เต็ม! ธุรกิจชะงัก โอนไปกระดานนอกไม่ได้")
-        elif fx_percent >= 0.8:
-            st.warning("⚠️ ใช้โควตาไปเกิน 80% แล้ว — วางแผนรอบถัดไปให้ดี")
-    with l2:
-        st.write(f"**Net Capital Rule (NCR Score)** — {ncr_score:.1f}%")
-        st.progress(ncr_score / 100.0)
-        if ncr_score < 50:
-            st.error("🚨 NCR ต่ำกว่าเกณฑ์! ก.ล.ต. สั่งเตรียมหยุดรับลูกค้า")
-        elif ncr_score < 70:
-            st.warning("⚠️ NCR เริ่มตึง — ควรทำ Liquidity Bridge ระบายคริปโตออก")
-
-    section("🕹️ Trading Desk Controls")
-    k1, k2, k3, k4 = st.columns(4)
-    with k1:
-        st.markdown("**สถานการณ์ตลาด**")
-        st.button("🔴 ลูกค้าแห่เทขาย 500K USDT", key="td_sell",
-                  on_click=cb_customer_sells, args=(500_000,), **WIDE)
-    with k2:
-        st.markdown("**Treasury โอนเงิน**")
-        st.button(f"💸 โอนไป {td_global_exchange} 1M USD", key="td_transfer",
-                  on_click=cb_back_to_back, args=(1_000_000, td_global_exchange), **WIDE)
-    with k3:
-        st.markdown("**กลยุทธ์แก้เกม**")
-        st.button("🌉 Liquidity Bridge กลับ KTB 500K", type="primary",
-                  key="td_bridge", on_click=cb_bridge, args=(500_000,), **WIDE)
-    with k4:
-        st.markdown("**จัดการเกม**")
-        st.button("🔄 Reset Desk", key="td_reset", on_click=cb_reset, **WIDE)
-
-    section("📝 Transaction Logs")
-    if st.session_state.logs:
-        for log in st.session_state.logs:
-            st.markdown(f"<div style='background:#111827;border-left:3px solid #374151;"
-                        f"padding:8px 12px;border-radius:6px;margin-bottom:6px;"
-                        f"font-size:.86rem;'>{log}</div>", unsafe_allow_html=True)
+    if not dates_ok:
+        st.error("❌ ช่วงวันที่ในแถบซ้ายไม่ถูกต้อง — แก้ก่อนถึงจะคำนวณความเสี่ยงได้")
     else:
-        st.caption("ยังไม่มีรายการ — กดปุ่มด้านบนเพื่อเริ่มจำลอง")
+        # =====================================================
+        # 1) เลือกโหมดความเสี่ยง
+        # =====================================================
+        section("🎛️ โหมดคำนวณความเสี่ยง")
+        cp_mode = st.radio("เลือกโหมด",
+                           ["Single-Asset (ใช้เหรียญที่เลือกในแถบซ้าย)", "Multi-Asset Portfolio"],
+                           horizontal=True, key="cp_mode")
+
+        rp = None            # risk profile dict (returns, es99, worst, ...)
+        risk_label = ""
+
+        if cp_mode.startswith("Single"):
+            if data.empty:
+                st.error(f"⚠️ โหลดข้อมูล {asset} ไม่สำเร็จ: {data_err}")
+            else:
+                rp = risk_profile(data["Global_USD"])
+                risk_label = asset
+                if rp is None:
+                    st.error("ข้อมูลย้อนหลังน้อยกว่า 30 วัน — เลือกช่วงเวลายาวขึ้นในแถบซ้าย")
+        else:
+            ma_c1, ma_c2 = st.columns([2, 1])
+            with ma_c1:
+                selected_assets = st.multiselect("เลือกเหรียญในพอร์ต", SUPPORTED_ASSETS,
+                                                 default=["BTC", "ETH", "USDT"], key="cp_ma_assets")
+            with ma_c2:
+                st.caption("ช่วงเวลาย้อนหลังใช้ค่าเดียวกับแถบซ้าย")
+                st.write(f"`{start_date} → {end_date}`")
+
+            if not selected_assets:
+                st.info("เลือกอย่างน้อย 1 เหรียญเพื่อคำนวณพอร์ต")
+            else:
+                st.caption("กำหนดสัดส่วนพอร์ต (%) — ระบบ normalize ให้รวมเป็น 100% ให้อัตโนมัติ")
+                wcols = st.columns(min(len(selected_assets), 6))
+                default_w = round(100 / len(selected_assets))
+                weights = {}
+                for i, a_ in enumerate(selected_assets):
+                    with wcols[i % len(wcols)]:
+                        weights[a_] = st.number_input(f"{a_} (%)", value=default_w, min_value=0,
+                                                       max_value=100, step=5, key=f"cp_w_{a_}")
+                wsum = sum(weights.values())
+                if wsum <= 0:
+                    st.error("กรุณากำหนดสัดส่วนอย่างน้อย 1 เหรียญให้มากกว่า 0%")
+                else:
+                    norm_w = {k: v / wsum for k, v in weights.items()}
+                    with st.spinner("กำลังโหลดราคาย้อนหลังของแต่ละเหรียญเพื่อคำนวณ correlation…"):
+                        ret_map = {}
+                        fail_list = []
+                        for a_ in selected_assets:
+                            d_, e_ = fetch_price_data(a_, start_date, end_date)
+                            if d_.empty:
+                                fail_list.append(a_)
+                            else:
+                                ret_map[a_] = np.log(d_["Global_USD"] / d_["Global_USD"].shift(1))
+                    if fail_list:
+                        st.warning(f"⚠️ โหลดข้อมูลไม่สำเร็จสำหรับ: {', '.join(fail_list)} — คำนวณจากเหรียญที่เหลือ")
+                    if len(ret_map) == 0:
+                        st.error("โหลดข้อมูลเหรียญในพอร์ตไม่สำเร็จเลยสักตัว")
+                    else:
+                        ret_df = pd.concat(ret_map, axis=1)
+                        ret_df.columns = list(ret_map.keys())
+                        ret_df = ret_df.dropna()
+                        if len(ret_df) < 30:
+                            st.error("ข้อมูลที่ overlap กันของทุกเหรียญมีน้อยกว่า 30 วัน — ลองลดจำนวนเหรียญหรือขยายช่วงเวลา")
+                        else:
+                            port_w = np.array([norm_w.get(c, 0) for c in ret_df.columns])
+                            port_returns = (ret_df * port_w).sum(axis=1)
+                            rp = _risk_stats(port_returns)
+                            risk_label = " + ".join(f"{k} {norm_w[k]*100:.0f}%" for k in ret_df.columns)
+
+                            if len(ret_df.columns) > 1:
+                                with st.expander("🔗 Correlation Matrix ระหว่างเหรียญในพอร์ต", expanded=False):
+                                    corr = ret_df.corr()
+                                    fig_corr = go.Figure(go.Heatmap(
+                                        z=corr.values, x=list(corr.columns), y=list(corr.columns),
+                                        colorscale="RdYlGn", zmin=-1, zmax=1,
+                                        texttemplate="%{z:.2f}", textfont={"size": 11}))
+                                    fig_corr.update_layout(template="plotly_dark", height=320,
+                                                           margin=dict(t=20, b=20))
+                                    st.plotly_chart(fig_corr, **WIDE)
+                                    st.caption("ยิ่งค่าใกล้ +1 = เคลื่อนไหวไปทางเดียวกัน (กระจายความเสี่ยงได้น้อย) "
+                                               "ใกล้ -1 หรือ 0 = ช่วยกระจายความเสี่ยงของพอร์ตได้ดีกว่า")
+
+        # =====================================================
+        # 2) พารามิเตอร์ธุรกรรม + งบดุล + คำนวณ
+        # =====================================================
+        if rp is not None:
+            usdthb_now = float(data["USDTHB"].iloc[-1]) if not data.empty else 35.5
+            spot_usd = float(data["Global_USD"].iloc[-1]) if (not data.empty and cp_mode.startswith("Single")) else None
+
+            section(f"📐 โปรไฟล์ความเสี่ยงจากข้อมูลจริง — {risk_label}")
+            rk = st.columns(4)
+            metric_card(rk[0], "Ann. Volatility", f"{rp['ann_vol']*100:.1f}%")
+            metric_card(rk[1], "VaR 99% (1 วัน)", f"{rp['var99']*100:.2f}%")
+            metric_card(rk[2], "Expected Shortfall 99%", f"{rp['es99']*100:.2f}%",
+                        sub_text="ค่าเฉลี่ยของการขาดทุนใน 1% วันที่แย่ที่สุด")
+            worst_dt = rp["worst_date"]
+            worst_dt_str = worst_dt.strftime("%Y-%m-%d") if hasattr(worst_dt, "strftime") else str(worst_dt)
+            metric_card(rk[3], "Worst Single Day", f"-{rp['worst']*100:.1f}%", sub_text=f"เกิดขึ้นเมื่อ {worst_dt_str}")
+
+            section("📥 พารามิเตอร์ธุรกรรม (Flow Assumptions)")
+            fc1, fc2 = st.columns(2)
+            with fc1:
+                monthly_volume_thb = st.number_input("ปริมาณธุรกรรมลูกค้าต่อเดือน (THB)",
+                                                      value=300_000_000, step=10_000_000, min_value=0,
+                                                      key="cp_volume")
+                net_bias_pct = st.slider("Net Flow Bias — ลูกค้าซื้อสุทธิ(+) / ขายสุทธิ(-)",
+                                          -100, 100, 20, key="cp_bias",
+                                          help="ทิศทางสุทธิที่ทำให้ต้องดองคริปโตไว้เป็นสต็อก (ฝั่ง + เท่านั้นที่กินสต็อก)") / 100
+                flow_cv_pct = st.slider("ความผันผวนของปริมาณต่อวัน (Coefficient of Variation, %)",
+                                         10, 150, 40, key="cp_cv") / 100
+            with fc2:
+                settlement_days = st.number_input("Settlement / Hedge Lag (วัน)", value=2, min_value=1,
+                                                  max_value=10, step=1, key="cp_lag",
+                                                  help="ระยะเวลาที่ต้องถือสต็อกไว้ก่อนจะ hedge/settle ได้ครบ")
+                confidence = st.select_slider("Confidence Level ของ Safety Stock",
+                                              options=[90, 95, 99, 99.9], value=99, key="cp_conf")
+                z_alpha = Z_SCORE_MAP[confidence]
+                cex_margin_asset = st.selectbox("สินทรัพย์ Margin บนกระดานโลก",
+                                                ["Stablecoin (ความเสี่ยงต่ำ)", "เหรียญเดียวกับที่เทรด (ความเสี่ยงเท่าคริปโต)"],
+                                                key="cp_cex_asset")
+
+            section("⚖️ เกณฑ์กำกับดูแล (ปรับได้)")
+            gc1, gc2, gc3 = st.columns(3)
+            with gc1:
+                ncr_min = st.number_input("เกณฑ์ NCR ขั้นต่ำ (%)", value=7.0, step=0.5, min_value=0.1, key="cp_ncr_min")
+            with gc2:
+                ncr_warn = st.number_input("เกณฑ์เตือนภัย NCR (%)", value=10.5, step=0.5,
+                                           min_value=ncr_min, key="cp_ncr_warn")
+            with gc3:
+                cex_counterparty_haircut = st.number_input("Counterparty Haircut กรณี Margin เป็น Stablecoin (%)",
+                                                            value=2.0, step=0.5, min_value=0.0, key="cp_cex_hc") / 100
+            st.caption("⚠️ ตัวเลขเกณฑ์ NCR ด้านบนเป็นค่าตั้งต้นสำหรับจำลองเท่านั้น — ก่อนใช้อ้างอิงจริงต้องตรวจสอบ "
+                       "ประกาศ ก.ล.ต. ฉบับล่าสุด เครื่องมือนี้ไม่ยืนยันว่าเป็นตัวเลขกำกับดูแลปัจจุบัน")
+
+            section("💼 เงินทุนที่มี (Capital Pool)")
+            bc1, bc2, bc3 = st.columns(3)
+            with bc1:
+                total_capital_thb = st.number_input(
+                    "เงินทุนสภาพคล่องรวม (THB)", value=150_000_000, step=5_000_000, min_value=0,
+                    key="cp_total_capital",
+                    help="เงินสดทั้งหมดก่อนจัดสรรไปเป็นสต็อกเหรียญ (ระบบจะคำนวณให้ว่าควรแบ่งเป็นเงินสด/สต็อกเท่าไหร่)")
+            with bc2:
+                cex_margin_thb = st.number_input("เงินทุนบนกระดานโลก / CEX Margin (THB)",
+                                                 value=40_000_000, step=1_000_000, min_value=0, key="cp_cex_margin")
+            with bc3:
+                liab_thb = st.number_input("หนี้สินต่อลูกค้า (THB)", value=200_000_000, step=5_000_000,
+                                           min_value=1, key="cp_liab")
+
+            # ---------- CORE CALC ----------
+            h_crypto = float(min(rp["es99"] * np.sqrt(settlement_days), 0.95))
+            if cex_margin_asset.startswith("Stablecoin"):
+                h_cex = float(cex_counterparty_haircut)
+            else:
+                h_cex = h_crypto
+
+            daily_vol_thb = monthly_volume_thb / 30.0
+            a_factor = (max(0.0, net_bias_pct) * settlement_days
+                        + z_alpha * flow_cv_pct * np.sqrt(settlement_days)) / 30.0  # THB สต็อกที่ต้องดอง ต่อ 1 บาทของปริมาณ/เดือน
+
+            required_stock_thb = a_factor * monthly_volume_thb
+            cash_after_stock_thb = total_capital_thb - required_stock_thb
+
+            nlc_thb = (cash_after_stock_thb + required_stock_thb * (1 - h_crypto)
+                       + cex_margin_thb * (1 - h_cex) - liab_thb)
+            ncr_pct = (nlc_thb / liab_thb * 100.0) if liab_thb > 0 else float("nan")
+
+            # ---------- MAX CAPACITY ----------
+            if a_factor > 0 and h_crypto > 0:
+                rhs = (total_capital_thb + cex_margin_thb * (1 - h_cex)
+                       - liab_thb * (1 + ncr_min / 100.0))
+                v_ncr_thb = max(0.0, rhs / (a_factor * h_crypto))
+            else:
+                v_ncr_thb = float("inf")
+            v_cash_thb = (total_capital_thb / a_factor) if a_factor > 0 else float("inf")
+            capital_max_v_thb = min(v_ncr_thb, v_cash_thb)
+
+            fx_max_v_thb = fx_limit_max * usdthb_now
+            overall_max_v_thb = min(capital_max_v_thb, fx_max_v_thb)
+            binding_side = "ทุน / NCR" if capital_max_v_thb < fx_max_v_thb else "FX Limit"
+
+            coin_price_thb = (spot_usd * usdthb_now) if spot_usd else None
+
+            # ---------- SUMMARY VERDICT ----------
+            section("🧾 สรุปผลสำหรับผู้บริหาร")
+            ok_ncr = (not pd.isna(ncr_pct)) and (ncr_pct >= ncr_min)
+            warn_ncr = ok_ncr and (ncr_pct < ncr_warn)
+            if pd.isna(ncr_pct):
+                verdict_box(False, "คำนวณ NCR ไม่ได้", "หนี้สินต่อลูกค้าต้องมากกว่า 0")
+            else:
+                verdict_box(
+                    ok_ncr,
+                    f"NCR โดยประมาณ = {ncr_pct:.2f}%  (เกณฑ์ขั้นต่ำ {ncr_min:.1f}% / เตือนภัย {ncr_warn:.1f}%)",
+                    f"ที่ปริมาณธุรกรรม {fmt_baht(monthly_volume_thb)}/เดือน ต้องดองสต็อกเหรียญ "
+                    f"{fmt_baht(required_stock_thb)} เหลือเงินสด {fmt_baht(cash_after_stock_thb)}"
+                    + (" — เงินสดติดลบ แปลว่าทุนไม่พอสำหรับปริมาณนี้!" if cash_after_stock_thb < 0 else ""),
+                    warn=warn_ncr,
+                )
+            cap_ok = monthly_volume_thb <= overall_max_v_thb
+            verdict_box(
+                cap_ok,
+                f"เพดานธุรกรรมสูงสุดที่รับได้ ≈ {fmt_baht(overall_max_v_thb)}/เดือน (ติดที่: {binding_side})",
+                f"ทุนรองรับได้ {fmt_baht(capital_max_v_thb)}/เดือน · FX Limit รองรับได้ {fmt_baht(fx_max_v_thb)}/เดือน"
+                + (" — ปริมาณที่ตั้งไว้เกินเพดานแล้ว" if not cap_ok else " — ปริมาณที่ตั้งไว้ยังอยู่ในเพดาน"),
+            )
+
+            # ---------- KPI GRID ----------
+            section("📊 รายละเอียดตัวเลข")
+            k1 = st.columns(4)
+            metric_card(k1[0], "Required Safety Stock", fmt_baht(required_stock_thb), None,
+                        f"Haircut ที่ใช้ {h_crypto*100:.2f}%"
+                        + (f" · ≈ {required_stock_thb/coin_price_thb:,.4f} {asset}" if coin_price_thb else ""))
+            metric_card(k1[1], "เงินสดคงเหลือหลังจัดสรร", fmt_baht(cash_after_stock_thb), cash_after_stock_thb)
+            metric_card(k1[2], "Net Liquid Capital (NLC)", fmt_baht(nlc_thb), nlc_thb)
+            metric_card(k1[3], "NCR", f"{ncr_pct:.2f}%" if not pd.isna(ncr_pct) else "N/A",
+                        (ncr_pct - ncr_min) if not pd.isna(ncr_pct) else None,
+                        f"ห่างจากเกณฑ์ขั้นต่ำ {ncr_pct-ncr_min:+.2f} pp" if not pd.isna(ncr_pct) else None)
+
+            k2 = st.columns(4)
+            metric_card(k2[0], "Haircut คริปโต (h)", f"{h_crypto*100:.2f}%", sub_text=f"= ES99% × √{settlement_days} วัน")
+            metric_card(k2[1], "Haircut CEX Margin", f"{h_cex*100:.2f}%")
+            metric_card(k2[2], "เพดานฝั่งทุน/NCR", fmt_baht(capital_max_v_thb))
+            metric_card(k2[3], "เพดานฝั่ง FX Limit", fmt_baht(fx_max_v_thb),
+                        sub_text=f"FX Limit {fx_limit_max:,.0f} USD × {usdthb_now:.2f}")
+
+            with st.expander("📐 สูตรที่ใช้คำนวณ (สำหรับอ้างอิงในห้องประชุม)"):
+                st.markdown(f"""
+**Safety Stock** (สต็อกเหรียญที่ต้องดำรงไว้):
+`I* = max(0, net_bias) × V/30 × L + z_α × (CV × V/30) × √L`
+
+**Net Liquid Capital & NCR:**
+`NLC = Cash + I×(1−h_crypto) + M×(1−h_CEX) − L_liab`
+`NCR = NLC / L_liab × 100`
+
+**Haircut จากข้อมูลจริง (ไม่ใช่เลขเดา):**
+`h_crypto = ES99% × √L` (capped ที่ 95%)
+
+**เพดานธุรกรรมสูงสุด** (ให้ NCR ≥ เกณฑ์ขั้นต่ำ พร้อมกันกับเงินสดไม่ติดลบ):
+`V_max = min( [Capital + M(1−h_CEX) − L_liab×(1+NCR_min/100)] / (a×h_crypto),  Capital/a,  FX_Limit×USDTHB )`
+โดย `a = [max(0,net_bias)×L + z_α×CV×√L] / 30`
+
+ค่าที่ใช้ตอนนี้: L = {settlement_days} วัน, z_α = {z_alpha:.3f} ({confidence}%), 
+CV = {flow_cv_pct*100:.0f}%, net_bias = {net_bias_pct*100:+.0f}%, h_crypto = {h_crypto*100:.2f}%
+                """)
+
+            # =====================================================
+            # 3) HISTORICAL REPLAY — Replay 5 ปี นับวันที่หลุดเกณฑ์จริง
+            # =====================================================
+            section("📼 Historical Replay — ย้อนดูว่าจะหลุดเกณฑ์กี่วันจริง")
+            st.caption("นำ log-return รายวันจริงทั้งช่วงที่เลือกในแถบซ้าย มา shock ใส่สต็อกที่คำนวณได้ "
+                       "(Historical Simulation) โดยคงเงินสด/CEX Margin/หนี้สินคงที่ตามที่ตั้งไว้ด้านบน")
+
+            hist_returns = rp["returns"]
+            crypto_val_series = required_stock_thb * np.exp(hist_returns)
+            nlc_series = cash_after_stock_thb + crypto_val_series + cex_margin_thb - liab_thb
+            ncr_series = nlc_series / liab_thb * 100.0 if liab_thb > 0 else pd.Series(dtype=float)
+            breach_mask = ncr_series < ncr_min
+            breach_days = int(breach_mask.sum())
+            breach_pct = breach_days / len(ncr_series) * 100.0 if len(ncr_series) else 0.0
+
+            hr = st.columns(3)
+            metric_card(hr[0], "จำนวนวันในประวัติศาสตร์ที่ทดสอบ", f"{len(ncr_series):,} วัน")
+            metric_card(hr[1], "วันที่ NCR จะหลุดเกณฑ์ขั้นต่ำ", f"{breach_days:,} วัน",
+                        -1 if breach_days else 0, f"{breach_pct:.2f}% ของวันทั้งหมด")
+            metric_card(hr[2], "NCR ต่ำสุดในประวัติศาสตร์ (จำลอง)",
+                        f"{ncr_series.min():.2f}%" if len(ncr_series) else "N/A",
+                        (ncr_series.min() - ncr_min) if len(ncr_series) else None)
+
+            if len(ncr_series):
+                fig_replay = go.Figure()
+                fig_replay.add_trace(go.Scatter(x=ncr_series.index, y=ncr_series.values, name="NCR (จำลองย้อนหลัง)",
+                                                line=dict(color="#00D26A", width=1.6)))
+                fig_replay.add_hline(y=ncr_min, line=dict(color="#FF4B4B", dash="dash"),
+                                     annotation_text=f"เกณฑ์ขั้นต่ำ {ncr_min:.1f}%")
+                fig_replay.add_hline(y=ncr_warn, line=dict(color="#F59E0B", dash="dot"),
+                                     annotation_text=f"เตือนภัย {ncr_warn:.1f}%")
+                if breach_mask.any():
+                    bd = ncr_series[breach_mask]
+                    fig_replay.add_trace(go.Scatter(x=bd.index, y=bd.values, mode="markers",
+                                                    name="หลุดเกณฑ์", marker=dict(color="#FF4B4B", size=5, symbol="x")))
+                fig_replay.update_layout(template="plotly_dark", height=420, hovermode="x unified",
+                                         margin=dict(t=30, b=20), yaxis_title="NCR (%)",
+                                         legend=dict(orientation="h", y=1.05, yanchor="bottom"))
+                st.plotly_chart(fig_replay, **WIDE)
+
+            # =====================================================
+            # 4) STRESS TEST — 6 สถานการณ์
+            # =====================================================
+            section("🧨 Stress Test — 6 สถานการณ์")
+
+            def _scenario_ncr(crypto_val, extra_haircut_mult=1.0, extra_stock=0.0):
+                h_eff = min(h_crypto * extra_haircut_mult, 0.99)
+                cv = crypto_val + extra_stock
+                nlc_s = cash_after_stock_thb + cv * (1 - h_eff) + cex_margin_thb * (1 - h_cex) - liab_thb
+                return (nlc_s / liab_thb * 100.0) if liab_thb > 0 else float("nan")
+
+            extra_flow = daily_vol_thb * 3.0     # bank run: ลูกค้าเทขาย 3 เท่าปริมาณเฉลี่ยรายวัน ในวันเดียว
+            fx_stuck = min(monthly_volume_thb, fx_max_v_thb) * 0.5  # FX limit ลดครึ่งหนึ่ง = โอนออกไม่ทันครึ่งหนึ่ง
+
+            scenarios = [
+                ("ราคาร่วง -10% ใน 1 วัน", _scenario_ncr(required_stock_thb * 0.90)),
+                ("ราคาร่วง -20% ใน 1 วัน", _scenario_ncr(required_stock_thb * 0.80)),
+                ("Worst Historical Day จริง", _scenario_ncr(required_stock_thb * (1 - rp["worst"]))),
+                ("Bank Run: ลูกค้าเทขาย 3× ปริมาณเฉลี่ย/วัน", _scenario_ncr(required_stock_thb, extra_stock=extra_flow)),
+                ("FX Limit ถูกตัดเหลือครึ่งหนึ่ง (โอนออกไม่ทัน)", _scenario_ncr(required_stock_thb, extra_stock=fx_stuck)),
+                ("Liquidity Crisis: Worst Day + Haircut เพิ่มเป็น 2×",
+                 _scenario_ncr(required_stock_thb * (1 - rp["worst"]), extra_haircut_mult=2.0)),
+            ]
+
+            sc_cols = st.columns(2)
+            for i, (label, ncr_s) in enumerate(scenarios):
+                with sc_cols[i % 2]:
+                    ok_s = (not pd.isna(ncr_s)) and (ncr_s >= ncr_min)
+                    warn_s = ok_s and (ncr_s < ncr_warn)
+                    verdict_box(ok_s, f"{label} → NCR {ncr_s:.2f}%" if not pd.isna(ncr_s) else f"{label} → N/A",
+                               f"เกณฑ์ขั้นต่ำ {ncr_min:.1f}% / เตือนภัย {ncr_warn:.1f}%", warn=warn_s)
+
+            st.caption("Stress Test ใช้เงินสด/CEX Margin/หนี้สินคงที่ตามที่ตั้งไว้ด้านบน แล้วช็อกเฉพาะฝั่งสต็อกเหรียญ/haircut "
+                       "เพื่อดูว่า NCR จะยังผ่านเกณฑ์อยู่หรือไม่ในแต่ละสถานการณ์")
