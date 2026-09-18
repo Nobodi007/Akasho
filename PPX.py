@@ -92,6 +92,13 @@ TV_GLOBAL_SYMBOL["USDC"] = "BINANCE:USDCUSDT"
 
 Z_SCORE_MAP = {90: 1.2816, 95: 1.645, 99: 2.326, 99.9: 3.09}
 
+# --- ข้อจำกัดตามกฎหมายควบคุมการแลกเปลี่ยนเงิน (ธปท.) ---
+# อ้างอิงจาก Exchange Control Regulations: วงเงิน 5,000,000 USD คือเพดาน "ต่อปี" สำหรับ
+# นักลงทุนรายย่อยที่ส่งเงินไปลงทุนหลักทรัพย์ต่างประเทศได้เอง ไม่ใช่วงเงินรายเดือนสำหรับ
+# ธุรกิจสินทรัพย์ดิจิทัล และไม่ครอบคลุมการโอนเงินไปซื้อ/หักบัญชีคริปโตฯ บนกระดานต่างประเทศ
+# (อยู่ใน Negative List) เว้นแต่ได้รับอนุญาตเป็นรายกรณีจาก ธปท.
+BOT_RETAIL_ANNUAL_FX_LIMIT_USD = 5_000_000
+
 
 # =========================================================
 # HELPERS
@@ -345,6 +352,29 @@ with st.sidebar:
                    f"แล้วปรับด้วย Local Premium เป็นตัวแทนราคา **{local_exchange}** "
                    f"(เทียบของจริงได้ในกราฟ TradingView หน้าแท็บ 1)")
 
+    with st.expander("🚨 ข้อจำกัดกฎหมายแลกเปลี่ยนเงิน (BOT Exchange Control)", expanded=True):
+        st.caption(
+            "ตามระเบียบควบคุมการแลกเปลี่ยนเงินของ ธปท. การโอนเงินออกนอกประเทศเพื่อชำระค่าสินทรัพย์ดิจิทัล "
+            "(รวมถึงการโอนไป Hedge/วางมาร์จิ้นบน Global CEX) อยู่ใน **Negative List** — ห้ามทำเสรี "
+            "เว้นแต่ได้รับอนุญาตจาก ธปท. เป็นรายกรณี และวงเงิน 5,000,000 USD คือเพดาน **ต่อปี** สำหรับ "
+            "นักลงทุนรายย่อยไปลงทุนหลักทรัพย์ต่างประเทศ ไม่ใช่วงเงินรายเดือนสำหรับธุรกิจคริปโตฯ"
+        )
+        has_negative_list_exemption = st.checkbox(
+            "ได้รับอนุญาตพิเศษ/อยู่ใน Regulatory Sandbox ให้โอนเงินไป Global CEX เพื่อ Hedge (Negative List Exemption)",
+            value=False, key="bt_bot_exemption",
+            help="หากยังไม่ได้รับอนุญาตเป็นรายกรณีจาก ธปท. การโอนเงินไป Hedge บนกระดานโลกถือว่าไม่สามารถทำได้ตามกฎหมาย "
+                 "ระบบจะบล็อกการ Hedge ทั้งหมดจนกว่าจะติ๊กช่องนี้")
+        if not has_negative_list_exemption:
+            st.error("🚨 ยังไม่มีการยืนยันว่าได้รับอนุญาตพิเศษจาก ธปท. — ระบบจะจำลองว่า **ไม่มีการโอนเงินออกไป Hedge ได้เลย** "
+                      "(Hedge Notional ถูกบังคับเป็น 0) เพื่อสะท้อนข้อจำกัดทางกฎหมายจริง")
+        fx_limit_basis = st.radio(
+            "ที่มาของวงเงิน FX ที่ใช้ในการจำลอง",
+            ["โควตาพิเศษที่เจรจา/ขอผ่อนผันจาก ธปท. (ระบุเป็นวงเงินต่อเดือนเอง)",
+             "เกณฑ์รายย่อยมาตรฐาน 5,000,000 USD/ปี (หาร 12 เป็นรายเดือน)"],
+            key="bt_fx_basis",
+            help="โดยดีฟอลต์ธุรกิจสินทรัพย์ดิจิทัลไม่มีวงเงินรายเดือนที่กำหนดไว้ตายตัว ต้องเจรจาเป็นรายกรณีกับ ธปท. "
+                 "ตัวเลือกที่สองใช้เกณฑ์รายย่อยเป็นค่าประมาณอนุรักษ์นิยมเท่านั้น ไม่ใช่เกณฑ์ที่ใช้ได้จริงกับนิติบุคคลคริปโตฯ")
+
     with st.expander("📅 ช่วงเวลา Backtest", expanded=True):
         today = pd.Timestamp.now().date()
         preset_days = {"1 เดือน": 30, "3 เดือน": 90, "6 เดือน": 180,
@@ -391,12 +421,31 @@ with st.sidebar:
             st.session_state.bt_prev_gx = global_exchange
 
         hedge_fee = st.number_input("ค่าธรรมเนียม Global CEX (%)", key="bt_hedge_fee", step=0.01) / 100
-        fx_limit_max = comma_number_input("FX Limit ต่อเดือน (USD)", value=5000000,
-                                          min_value=1, key="bt_fx_limit")
-        st.caption(f"≈ ${fmt_num(fx_limit_max)}")
+
+        if fx_limit_basis.startswith("โควตาพิเศษ"):
+            fx_limit_input = comma_number_input("วงเงิน Hedge ที่เจรจากับ ธปท. ต่อเดือน (USD)", value=5000000,
+                                                 min_value=1, key="bt_fx_limit")
+            fx_limit_max = fx_limit_input
+            st.caption(f"≈ ${fmt_num(fx_limit_max)}/เดือน (ต้องมีเอกสารอนุมัติจาก ธปท. รองรับตัวเลขนี้จริง)")
+        else:
+            fx_limit_input = comma_number_input("วงเงินรายปีตามเกณฑ์รายย่อย (USD)",
+                                                 value=BOT_RETAIL_ANNUAL_FX_LIMIT_USD,
+                                                 min_value=1, key="bt_fx_limit_annual")
+            fx_limit_max = fx_limit_input / 12.0
+            st.caption(f"≈ ${fmt_num(fx_limit_input)}/ปี → ${fmt_num(fx_limit_max)}/เดือน ที่ใช้จำลอง "
+                       f"(เกณฑ์นี้เป็นของนักลงทุนรายย่อยไปหลักทรัพย์ต่างประเทศ ใช้เป็นค่าประมาณอนุรักษ์นิยม "
+                       f"ไม่ใช่วงเงินที่ยืนยันแล้วว่าใช้กับธุรกิจคริปโตฯ ได้)")
+
+        if not has_negative_list_exemption:
+            fx_limit_max = 0.0
+
         local_premium = st.number_input(
             "Local Premium/Discount ฝั่งไทย (%)", value=0.1, step=0.1, key="bt_local_premium",
             help="ส่วนต่างราคากระดานไทยเทียบราคาโลก ค่าเริ่มต้น 0.1% สะท้อนพรีเมียมที่มักพบช่วงตลาดปกติ") / 100
+        if local_premium > 0:
+            st.caption("⚠️ การทำกำไรจากส่วนต่างราคา (Arbitrage) ด้วยการโอนมูลค่าข้ามประเทศผ่านคริปโตฯ/Stablecoin "
+                       "เป็นธุรกรรมที่ ธปท./ก.ล.ต. เพ่งเล็งว่าอาจเข้าข่ายหลีกเลี่ยงการควบคุมเงินทุนไหลออก — "
+                       "ควรมีเอกสารรองรับวัตถุประสงค์ธุรกรรมให้ชัดเจน")
 
     with st.expander("💳 ค่าธรรมเนียมกระดานไทย"):
         st.caption("เราเป็นเจ้าของกระดานไทย ค่าธรรมเนียมซื้อขายจึงเป็น **รายได้** "
@@ -427,6 +476,8 @@ with st.sidebar:
 
     if asset in STABLECOINS:
         with st.expander("🪙 กลยุทธ์ Stablecoin", expanded=True):
+            st.warning("⚠️ มีแนวโน้มที่ทางการจะออกเกณฑ์จำกัดมูลค่าการโอน Stablecoin เข้า-ออกประเทศ "
+                       "เพื่อสกัดกั้นการเลี่ยงระบบควบคุมเงินทุน — ควรจำลองสถานการณ์ที่วงเงินโอน Stablecoin ถูกจำกัดเพิ่มเติมด้วย")
             peg_target = st.number_input("Peg Target (USD)", value=1.00, step=0.01, key="bt_peg")
             depeg_capture_pct = st.slider("Depeg Arbitrage Capture (%)", 0, 100, 80, key="bt_depeg") / 100
             carry_apy = st.number_input("Carry Yield APY (%)", value=4.0, step=0.5, key="bt_carry") / 100
@@ -534,6 +585,12 @@ with tab1:
 
         st.success(f"✅ โหลดข้อมูล **{asset}** ช่วง {start_date} → {end_date} สำเร็จ "
                    f"({total_days} วัน | เทรดได้จริง {traded_days} วัน)")
+
+        if not has_negative_list_exemption:
+            verdict_box(False, "Back-to-Back Hedging ไม่สามารถทำได้ตามกฎหมายในโหมดจำลองนี้",
+                        "ยังไม่ได้ติ๊กยืนยันว่าได้รับอนุญาตพิเศษจาก ธปท. (Negative List Exemption) ในแถบซ้าย "
+                        "ระบบจึงบังคับ FX Limit = 0 และไม่มีการ Hedge เกิดขึ้นเลยในผลจำลองด้านล่าง — "
+                        "ตัวเลข P&L ที่เห็นคือ Unhedged position ล้วน ๆ")
 
         # ---------- LIVE TRADINGVIEW ----------
         section(f"📉 ราคาเรียลไทม์ — {asset}")
@@ -693,6 +750,11 @@ with tab2:
 
 โดยดึงค่า Volatility / VaR / Expected Shortfall จาก **ราคาจริงย้อนหลัง** (ช่วงเวลาเดียวกับที่ตั้งไว้ในแถบซ้าย)
     """)
+
+    if not has_negative_list_exemption:
+        verdict_box(False, "การ Hedge บน Global CEX ยังไม่ได้รับอนุญาตตามกฎหมาย",
+                    "หน้านี้จำลองโดยใช้ FX Limit = 0 USD/เดือน ตามค่าที่ตั้งในแถบซ้าย — เพดานธุรกรรมที่คำนวณด้านล่าง "
+                    "จะถูกจำกัดด้วยเงื่อนไขนี้จนกว่าจะยืนยันว่าได้รับอนุญาตพิเศษจาก ธปท.")
 
     if not dates_ok:
         st.error("❌ ช่วงวันที่ในแถบซ้ายไม่ถูกต้อง — แก้ก่อนถึงจะคำนวณความเสี่ยงได้")
@@ -965,7 +1027,9 @@ with tab2:
                 cap_ok,
                 f"เพดานธุรกรรมสูงสุดที่รับได้ ≈ {fmt_baht(overall_max_v_thb)}/เดือน (ติดที่: {binding_side})",
                 f"ทุนรองรับได้ {fmt_baht(capital_max_v_thb)}/เดือน · FX Limit รองรับได้ {fmt_baht(fx_max_v_thb)}/เดือน"
-                + (" — ปริมาณที่ตั้งไว้เกินเพดานแล้ว" if not cap_ok else " — ปริมาณที่ตั้งไว้ยังอยู่ในเพดาน"),
+                + (" — ปริมาณที่ตั้งไว้เกินเพดานแล้ว" if not cap_ok else " — ปริมาณที่ตั้งไว้ยังอยู่ในเพดาน")
+                + ("" if has_negative_list_exemption else
+                   " · ⚠️ เพดานฝั่ง FX Limit ถูกบังคับเป็น 0 เพราะยังไม่มี Negative List Exemption"),
             )
 
             # ---------- KPI GRID ----------
