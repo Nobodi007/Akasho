@@ -96,7 +96,7 @@ Z_SCORE_MAP = {90: 1.2816, 95: 1.645, 99: 2.326, 99.9: 3.09}
 # =========================================================
 # HELPERS
 # =========================================================
-def fmt_baht(value, force_sign=False):
+def fmt_num(value, force_sign=False):
     value = 0.0 if pd.isna(value) else float(value)
     sign = "- " if value < 0 else ("+ " if force_sign else "")
     v = abs(value)
@@ -104,7 +104,11 @@ def fmt_baht(value, force_sign=False):
     elif v >= 1_000_000:     num = f"{v/1_000_000:,.2f}M"
     elif v >= 1_000:         num = f"{v/1_000:,.1f}K"
     else:                    num = f"{v:,.2f}"
-    return f"{sign}฿ {num}"
+    return f"{sign}{num}"
+
+
+def fmt_baht(value, force_sign=False):
+    return f"฿ {fmt_num(value, force_sign)}"
 
 
 def colored_metric(label, display_value, raw_value=None, sub_text=None, font_size="1.5rem"):
@@ -347,6 +351,7 @@ with st.sidebar:
 
     with st.expander("💰 พารามิเตอร์ Dealer", expanded=True):
         trade_vol = st.number_input("ปริมาณซื้อขายลูกค้า/วัน (USD eq.)", value=100000, step=10000, key="bt_trade_vol")
+        st.caption(f"≈ ${fmt_num(trade_vol)} · {trade_vol:,.0f} USD")
         dealer_spread = st.number_input("Dealer Spread ที่เก็บจากลูกค้า (%)", value=0.5, step=0.1, key="bt_spread") / 100
 
         if "bt_prev_gx" not in st.session_state:
@@ -360,6 +365,7 @@ with st.sidebar:
         hedge_fee = st.number_input("ค่าธรรมเนียม Global CEX (%)", key="bt_hedge_fee", step=0.01) / 100
         fx_limit_max = st.number_input("FX Limit ต่อเดือน (USD)", value=5000000, step=500000,
                                        min_value=1, key="bt_fx_limit")
+        st.caption(f"≈ ${fmt_num(fx_limit_max)} · {fx_limit_max:,.0f} USD")
         local_premium = st.number_input(
             "Local Premium/Discount ฝั่งไทย (%)", value=0.1, step=0.1, key="bt_local_premium",
             help="ส่วนต่างราคากระดานไทยเทียบราคาโลก ค่าเริ่มต้น 0.1% สะท้อนพรีเมียมที่มักพบช่วงตลาดปกติ") / 100
@@ -747,6 +753,7 @@ with tab2:
                 monthly_volume_thb = st.number_input("ปริมาณธุรกรรมลูกค้าต่อเดือน (THB)",
                                                       value=300_000_000, step=10_000_000, min_value=0,
                                                       key="cp_volume")
+                st.caption(f"≈ {fmt_baht(monthly_volume_thb)} · {monthly_volume_thb:,.0f} บาท")
                 net_bias_pct = st.slider("Net Flow Bias — ลูกค้าซื้อสุทธิ(+) / ขายสุทธิ(-)",
                                           -100, 100, 20, key="cp_bias",
                                           help="ทิศทางสุทธิที่ทำให้ต้องดองคริปโตไว้เป็นสต็อก (ฝั่ง + เท่านั้นที่กินสต็อก)") / 100
@@ -818,12 +825,15 @@ with tab2:
                     "เงินทุนสภาพคล่องรวม (THB)", value=150_000_000, step=5_000_000, min_value=0,
                     key="cp_total_capital",
                     help="เงินสดทั้งหมดก่อนจัดสรรไปเป็นสต็อกเหรียญ (ระบบจะคำนวณให้ว่าควรแบ่งเป็นเงินสด/สต็อกเท่าไหร่)")
+                st.caption(f"≈ {fmt_baht(total_capital_thb)} · {total_capital_thb:,.0f} บาท")
             with bc2:
                 cex_margin_thb = st.number_input("เงินทุนบนกระดานโลก / CEX Margin (THB)",
                                                  value=40_000_000, step=1_000_000, min_value=0, key="cp_cex_margin")
+                st.caption(f"≈ {fmt_baht(cex_margin_thb)} · {cex_margin_thb:,.0f} บาท")
             with bc3:
                 liab_thb = st.number_input("หนี้สินต่อลูกค้า (THB)", value=200_000_000, step=5_000_000,
                                            min_value=1, key="cp_liab")
+                st.caption(f"≈ {fmt_baht(liab_thb)} · {liab_thb:,.0f} บาท")
 
             # ---------- CORE CALC ----------
             h_crypto = float(min(rp["es99"] * np.sqrt(settlement_days), 0.95))
