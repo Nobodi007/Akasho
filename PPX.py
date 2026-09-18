@@ -159,7 +159,9 @@ def section(title):
     st.markdown(f'<div class="xs-sec">{title}</div>', unsafe_allow_html=True)
 
 
-def calc_thb_withdrawal_fee(amount_thb: float, bank_type: str) -> float:
+def calc_thb_withdrawal_fee(amount_thb: float, bank_type: str, ktb_fee_thb: float = 15.0) -> float:
+    if bank_type == "KTB (กรุงไทย)":
+        return ktb_fee_thb
     if bank_type == "SCB":
         return 20.0
     return 20.0 if amount_thb <= 2_000_000 else 70.0
@@ -405,8 +407,23 @@ with st.sidebar:
                                               help="0% = Pass-through เท่าต้นทุนจริง") / 100
         settlements_per_day = st.number_input("รอบถอนเหรียญให้ลูกค้า/วัน", value=1, min_value=1, step=1,
                                               key="bt_settlements")
-        bank_type = st.selectbox("ธนาคารปลายทางถอนบาท", ["SCB", "ธนาคารอื่น"], key="bt_bank_type")
+        bank_type = st.selectbox("ธนาคารปลายทางถอนบาท", ["SCB", "ธนาคารอื่น", "KTB (กรุงไทย)"], key="bt_bank_type")
         st.caption(f"ขั้นต่ำซื้อขายจริง {MIN_TRADE_THB:,.0f} บาท/คำสั่ง — ต่ำกว่าปริมาณที่ตั้งไว้มาก จึงไม่กระทบผลจำลอง")
+
+    with st.expander("🏦 สิทธิพิเศษ KTB (ความสัมพันธ์กับกรุงไทย)", expanded=(bank_type.startswith("KTB"))):
+        st.caption("ใส่ตัวเลขจริงที่เจรจาได้กับ KTB ตรงนี้ — ค่าเริ่มต้นเป็นเพียงสมมติฐานเพื่อจำลอง "
+                   "ไม่ใช่เรทที่ยืนยันแล้ว ต้องยืนยันกับ Relationship Manager ก่อนใช้จริง")
+        use_ktb_fx = st.checkbox("ใช้เรทแลกเปลี่ยน USD/THB พิเศษจาก KTB", value=True, key="bt_use_ktb_fx",
+                                 help="เรทพิเศษที่ดีกว่าตลาด จะลดต้นทุน/เพิ่มรายได้ตอนแปลงเงิน USD กลับเป็น THB")
+        ktb_fx_spread_bps = st.number_input(
+            "ส่วนต่างเรทที่ดีกว่าตลาด (bps)", value=15.0, step=1.0, min_value=0.0, key="bt_ktb_fx_bps",
+            help="1 bps = 0.01% เช่น 15 bps บนปริมาณ 100,000 USD ≈ ประหยัด 150 USD เทียบเท่าเรทตลาด") if use_ktb_fx else 0.0
+        ktb_wd_fee_thb = st.number_input(
+            "ค่าธรรมเนียมถอนบาทของ KTB ต่อรายการ (บาท)", value=15.0, step=1.0, min_value=0.0, key="bt_ktb_wd_fee",
+            help="ใช้แทนอัตรา SCB/ธนาคารอื่น เมื่อเลือก 'ธนาคารปลายทางถอนบาท' เป็น KTB ด้านบน")
+        st.caption(f"ผลลัพธ์: เรทพิเศษ {ktb_fx_spread_bps:.1f} bps ({ktb_fx_spread_bps/100:.3f}%) "
+                  + (f"· ค่าธรรมเนียมถอน KTB {ktb_wd_fee_thb:,.0f} บาท/รายการ (ใช้งานอยู่)"
+                     if bank_type.startswith("KTB") else "· เลือกธนาคารปลายทางเป็น KTB ด้านบนเพื่อใช้ค่าธรรมเนียมนี้"))
 
     if asset in STABLECOINS:
         with st.expander("🪙 กลยุทธ์ Stablecoin", expanded=True):
@@ -449,6 +466,8 @@ with tab1:
         bt["FX_Basis_PnL_THB"] = trade_vol * bt["USDTHB"] * local_premium
         bt["Hedge_Fee_Cost_THB"] = trade_vol * hedge_fee * bt["USDTHB"]
         bt["Hedge_Notional_USD"] = trade_vol * (1 + hedge_fee)
+        # KTB: เรทแลกเปลี่ยน USD/THB พิเศษที่ดีกว่าตลาด (bps) — ประหยัดทุกครั้งที่แปลงเงินก้อนที่ hedge กลับมาเป็นบาท
+        bt["KTB_FX_Benefit_THB"] = trade_vol * bt["USDTHB"] * (ktb_fx_spread_bps / 10000.0)
 
         if asset in STABLECOINS:
             bt["Depeg_Deviation"] = peg_target - bt["Global_USD"]
@@ -470,7 +489,7 @@ with tab1:
         wd_network_cost = wd_fee_per_coin * bt["Global_USD"] * bt["USDTHB"] * settlements_per_day
         bt["Withdrawal_Fee_Markup_Revenue_THB"] = wd_network_cost * withdrawal_fee_markup_pct
 
-        bt["THB_WD_Fee"] = bt["USDTHB"].map(lambda fx: calc_thb_withdrawal_fee(trade_vol * fx, bank_type))
+        bt["THB_WD_Fee"] = bt["USDTHB"].map(lambda fx: calc_thb_withdrawal_fee(trade_vol * fx, bank_type, ktb_wd_fee_thb))
         bt["THB_Fee_Markup_Revenue_THB"] = (bt["THB_WD_Fee"] * settlements_per_day
                                               * withdrawal_fee_markup_pct)
 
@@ -479,7 +498,8 @@ with tab1:
                                    + bt["THB_Fee_Markup_Revenue_THB"])
 
         bt["Revenue_THB"] = (bt["Spread_Revenue_THB"] + bt["FX_Basis_PnL_THB"]
-                               + bt["Fee_Revenue_THB"] + bt["Depeg_PnL_THB"] + bt["Carry_Yield_THB"])
+                               + bt["Fee_Revenue_THB"] + bt["Depeg_PnL_THB"] + bt["Carry_Yield_THB"]
+                               + bt["KTB_FX_Benefit_THB"])
         bt["Cost_THB"] = bt["Hedge_Fee_Cost_THB"] + bt["Slippage_Cost_THB"]
         bt["Daily_PnL_THB"] = bt["Revenue_THB"] - bt["Cost_THB"]
 
@@ -576,6 +596,9 @@ with tab1:
         wf_labels = ["Spread Revenue", "FX Basis P&L", "Fee Revenue"]
         wf_values = [traded["Spread_Revenue_THB"].sum(), traded["FX_Basis_PnL_THB"].sum(),
                      traded["Fee_Revenue_THB"].sum()]
+        if use_ktb_fx:
+            wf_labels += ["KTB FX Benefit"]
+            wf_values += [traded["KTB_FX_Benefit_THB"].sum()]
         if asset in STABLECOINS:
             wf_labels += ["Depeg Arbitrage", "Carry Yield"]
             wf_values += [traded["Depeg_PnL_THB"].sum(), traded["Carry_Yield_THB"].sum()]
@@ -648,7 +671,7 @@ with tab1:
         with st.expander("🔍 Daily Ledger (100 วันล่าสุด)"):
             cols = ["Global_USD", "Local_THB", "USDTHB", "Volatility_Pct",
                     "Gross_Notional_THB", "Spread_Revenue_THB", "FX_Basis_PnL_THB",
-                    "Hedge_Fee_Cost_THB", "Slippage_Cost_THB", "Fee_Revenue_THB"]
+                    "KTB_FX_Benefit_THB", "Hedge_Fee_Cost_THB", "Slippage_Cost_THB", "Fee_Revenue_THB"]
             if asset in STABLECOINS:
                 cols += ["Depeg_Deviation", "Depeg_PnL_THB", "Carry_Yield_THB"]
             cols += ["Actual_Daily_PnL", "Current_FX_Usage", "FX_Limit_Hit"]
