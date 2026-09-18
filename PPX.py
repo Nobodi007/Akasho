@@ -111,6 +111,32 @@ def fmt_baht(value, force_sign=False):
     return f"฿ {fmt_num(value, force_sign)}"
 
 
+def _reformat_comma_key(key):
+    """Callback: เมื่อผู้ใช้พิมพ์เสร็จ ให้จัดรูปเลขในช่องใหม่ให้มี comma คั่นหลักพัน"""
+    raw = st.session_state.get(key, "")
+    cleaned = raw.replace(",", "").replace(" ", "").strip()
+    try:
+        num = float(cleaned)
+        st.session_state[key] = f"{num:,.0f}" if num == int(num) else f"{num:,.2f}"
+    except ValueError:
+        pass  # พิมพ์ไม่ครบ/ไม่ใช่ตัวเลข ปล่อยไว้เฉย ๆ จนกว่าจะแก้ให้ถูก
+
+
+def comma_number_input(label, value, min_value=None, key=None, help=None):
+    """ช่องกรอกตัวเลขที่โชว์ comma คั่นหลักพันในช่องเลย (เช่น 150,000,000) แทน number_input ธรรมดา"""
+    if key not in st.session_state:
+        st.session_state[key] = f"{value:,.0f}"
+    st.text_input(label, key=key, help=help, on_change=_reformat_comma_key, args=(key,))
+    cleaned = st.session_state[key].replace(",", "").replace(" ", "").strip()
+    try:
+        num = float(cleaned)
+    except ValueError:
+        num = float(value)
+    if min_value is not None and num < min_value:
+        num = float(min_value)
+    return num
+
+
 def colored_metric(label, display_value, raw_value=None, sub_text=None, font_size="1.5rem"):
     color = "#FAFAFA" if raw_value is None else ("#00D26A" if raw_value >= 0 else "#FF4B4B")
     sub = f'<div style="font-size:.78rem;color:{color};opacity:.85;margin-top:3px;">{sub_text}</div>' if sub_text else ""
@@ -350,8 +376,8 @@ with st.sidebar:
         st.error("❌ วันเริ่มต้นต้องอยู่ก่อนวันสิ้นสุด")
 
     with st.expander("💰 พารามิเตอร์ Dealer", expanded=True):
-        trade_vol = st.number_input("ปริมาณซื้อขายลูกค้า/วัน (USD eq.)", value=100000, step=10000, key="bt_trade_vol")
-        st.caption(f"≈ ${fmt_num(trade_vol)} · {trade_vol:,.0f} USD")
+        trade_vol = comma_number_input("ปริมาณซื้อขายลูกค้า/วัน (USD eq.)", value=100000, key="bt_trade_vol")
+        st.caption(f"≈ ${fmt_num(trade_vol)}")
         dealer_spread = st.number_input("Dealer Spread ที่เก็บจากลูกค้า (%)", value=0.5, step=0.1, key="bt_spread") / 100
 
         if "bt_prev_gx" not in st.session_state:
@@ -363,9 +389,9 @@ with st.sidebar:
             st.session_state.bt_prev_gx = global_exchange
 
         hedge_fee = st.number_input("ค่าธรรมเนียม Global CEX (%)", key="bt_hedge_fee", step=0.01) / 100
-        fx_limit_max = st.number_input("FX Limit ต่อเดือน (USD)", value=5000000, step=500000,
-                                       min_value=1, key="bt_fx_limit")
-        st.caption(f"≈ ${fmt_num(fx_limit_max)} · {fx_limit_max:,.0f} USD")
+        fx_limit_max = comma_number_input("FX Limit ต่อเดือน (USD)", value=5000000,
+                                          min_value=1, key="bt_fx_limit")
+        st.caption(f"≈ ${fmt_num(fx_limit_max)}")
         local_premium = st.number_input(
             "Local Premium/Discount ฝั่งไทย (%)", value=0.1, step=0.1, key="bt_local_premium",
             help="ส่วนต่างราคากระดานไทยเทียบราคาโลก ค่าเริ่มต้น 0.1% สะท้อนพรีเมียมที่มักพบช่วงตลาดปกติ") / 100
@@ -750,10 +776,10 @@ with tab2:
             section("📥 พารามิเตอร์ธุรกรรม (Flow Assumptions)")
             fc1, fc2 = st.columns(2)
             with fc1:
-                monthly_volume_thb = st.number_input("ปริมาณธุรกรรมลูกค้าต่อเดือน (THB)",
-                                                      value=300_000_000, step=10_000_000, min_value=0,
-                                                      key="cp_volume")
-                st.caption(f"≈ {fmt_baht(monthly_volume_thb)} · {monthly_volume_thb:,.0f} บาท")
+                monthly_volume_thb = comma_number_input("ปริมาณธุรกรรมลูกค้าต่อเดือน (THB)",
+                                                        value=300_000_000, min_value=0,
+                                                        key="cp_volume")
+                st.caption(f"≈ {fmt_baht(monthly_volume_thb)}")
                 net_bias_pct = st.slider("Net Flow Bias — ลูกค้าซื้อสุทธิ(+) / ขายสุทธิ(-)",
                                           -100, 100, 20, key="cp_bias",
                                           help="ทิศทางสุทธิที่ทำให้ต้องดองคริปโตไว้เป็นสต็อก (ฝั่ง + เท่านั้นที่กินสต็อก)") / 100
@@ -821,19 +847,19 @@ with tab2:
             section("💼 เงินทุนที่มี (Capital Pool)")
             bc1, bc2, bc3 = st.columns(3)
             with bc1:
-                total_capital_thb = st.number_input(
-                    "เงินทุนสภาพคล่องรวม (THB)", value=150_000_000, step=5_000_000, min_value=0,
+                total_capital_thb = comma_number_input(
+                    "เงินทุนสภาพคล่องรวม (THB)", value=150_000_000, min_value=0,
                     key="cp_total_capital",
                     help="เงินสดทั้งหมดก่อนจัดสรรไปเป็นสต็อกเหรียญ (ระบบจะคำนวณให้ว่าควรแบ่งเป็นเงินสด/สต็อกเท่าไหร่)")
-                st.caption(f"≈ {fmt_baht(total_capital_thb)} · {total_capital_thb:,.0f} บาท")
+                st.caption(f"≈ {fmt_baht(total_capital_thb)}")
             with bc2:
-                cex_margin_thb = st.number_input("เงินทุนบนกระดานโลก / CEX Margin (THB)",
-                                                 value=40_000_000, step=1_000_000, min_value=0, key="cp_cex_margin")
-                st.caption(f"≈ {fmt_baht(cex_margin_thb)} · {cex_margin_thb:,.0f} บาท")
+                cex_margin_thb = comma_number_input("เงินทุนบนกระดานโลก / CEX Margin (THB)",
+                                                     value=40_000_000, min_value=0, key="cp_cex_margin")
+                st.caption(f"≈ {fmt_baht(cex_margin_thb)}")
             with bc3:
-                liab_thb = st.number_input("หนี้สินต่อลูกค้า (THB)", value=200_000_000, step=5_000_000,
-                                           min_value=1, key="cp_liab")
-                st.caption(f"≈ {fmt_baht(liab_thb)} · {liab_thb:,.0f} บาท")
+                liab_thb = comma_number_input("หนี้สินต่อลูกค้า (THB)", value=200_000_000,
+                                              min_value=1, key="cp_liab")
+                st.caption(f"≈ {fmt_baht(liab_thb)}")
 
             # ---------- CORE CALC ----------
             h_crypto = float(min(rp["es99"] * np.sqrt(settlement_days), 0.95))
