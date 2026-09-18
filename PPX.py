@@ -1280,7 +1280,13 @@ with tab3:
                 with st.container(border=True):
                     order_side = st.radio("ประเภทคำสั่ง", ["ซื้อเหรียญ (Buy)", "ขายเหรียญ (Sell)"], horizontal=True, key="sim_side")
                     side_key = "buy" if "ซื้อ" in order_side else "sell"
-                    order_amt = comma_number_input(f"มูลค่าที่ต้องการเทรด (บาท)", value=500_000, min_value=0, key="sim_amount")
+                    order_amt = comma_number_input(
+                        f"มูลค่าที่ต้องการเทรด (บาท)",
+                        value=500_000,
+                        min_value=0,
+                        key="sim_amount",
+                        help="ใส่เป็น Gross Order Notional: 500,000 = ออเดอร์มูลค่า 500,000 บาท; Trading Fee คิดแยกต่างหาก"
+                    )
                     
                     mid_now = coin_price_thb_now * (1 + local_premium)
                     quote_now = mid_now * (1 + dealer_spread) if side_key == "buy" else mid_now * (1 - dealer_spread)
@@ -1305,8 +1311,18 @@ with tab3:
                     st.rerun()
 
                 if send:
-                    steps, _ = execute_order(sim, side_key, float(order_amt), ctx)
+                    # The dashboard is rendered above this button block.
+                    # Force one clean rerun after mutating session state so the
+                    # Real-time cards (PnL, order count, inventory, FX usage, NC)
+                    # immediately reflect the newly executed order instead of
+                    # showing the pre-click values while the Order Journey has
+                    # already updated.
+                    steps, err = execute_order(sim, side_key, float(order_amt), ctx)
                     st.session_state.sim_steps = steps
+                    if err:
+                        st.error(err)
+                    else:
+                        st.rerun()
 
                 if run_day:
                     rng = np.random.default_rng(int(seed))
@@ -1318,8 +1334,13 @@ with tab3:
                     for _ in range(int(n_orders)):
                         amt = float(rng.lognormal(mu, sigma))
                         s_ = "buy" if rng.random() < p_buy else "sell"
-                        last_steps, _ = execute_order(sim, s_, max(amt, MIN_TRADE_THB), ctx)
+                        last_steps, err = execute_order(sim, s_, max(amt, MIN_TRADE_THB), ctx)
+                        if err:
+                            continue
                     st.session_state.sim_steps = last_steps
+                    # Same reason as the single-order path: refresh the whole
+                    # page so the dashboard is calculated from the updated state.
+                    st.rerun()
 
             with right:
                 st.markdown("#### 🔎 เส้นทางการทำงาน (Order Journey)")
