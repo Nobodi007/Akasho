@@ -883,20 +883,32 @@ def _sim_defaults(asset_name, spot_usd, usdthb, target_stock_thb):
     }
 
 def _sim_config_signature(ctx, target_stock_thb):
-    """Reset accumulated simulation when model assumptions change."""
+    """Return a stable, hashable signature for the simulator state.
+
+    Use ``dict.get`` rather than direct indexing so a deployment running an
+    older/mixed ctx payload cannot crash with KeyError. Missing keys still
+    participate in the signature as ``None`` and therefore force a reset.
+    Spot/FX are included because they change the quoted price and the
+    initial inventory valuation.
+    """
     keys = [
-        "asset", "local_premium", "spread", "hedge_fee", "fx_limit",
-        "daily_vol", "slip_sens", "include_fee_rev", "wd_markup",
-        "wd_fee_per_coin", "bank_type", "ktb_wd_fee", "ktb_fx_bps",
-        "capital", "cex_margin", "liab", "h_crypto", "h_cex",
-        "fixed_min_nc", "trading_risk_rate", "daily_volume_thb",
-        "custody_rate", "hot_breach",
+        "asset", "spot_usd", "usdthb", "local_premium", "spread",
+        "hedge_fee", "fx_limit", "daily_vol", "slip_sens",
+        "include_fee_rev", "wd_markup", "wd_fee_per_coin", "bank_type",
+        "ktb_wd_fee", "ktb_fx_bps", "capital", "cex_margin", "liab",
+        "h_crypto", "h_cex", "fixed_min_nc", "trading_risk_rate",
+        "daily_volume_thb", "custody_rate", "hot_breach",
     ]
-    return tuple(
-        round(float(ctx[k]), 10) if isinstance(ctx[k], (int, float, np.floating))
-        else ctx[k]
-        for k in keys
-    ) + (round(float(target_stock_thb), 2),)
+
+    values = []
+    for key in keys:
+        value = ctx.get(key, None)
+        if isinstance(value, (int, float, np.integer, np.floating)) and not isinstance(value, bool):
+            value = round(float(value), 10)
+        values.append(value)
+
+    values.append(round(float(target_stock_thb), 2))
+    return tuple(values)
 
 def execute_order(sim, side, amount_thb, ctx):
     """
