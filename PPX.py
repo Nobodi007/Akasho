@@ -346,10 +346,7 @@ with st.sidebar:
         st.error("❌ วันเริ่มต้นต้องอยู่ก่อนวันสิ้นสุด")
 
     with st.expander("💰 พารามิเตอร์ Dealer", expanded=True):
-        trade_vol_k = st.number_input("ปริมาณซื้อขายลูกค้า/วัน (พัน USD)", value=100.0, step=10.0,
-                                       min_value=0.0, key="bt_trade_vol",
-                                       help="กรอกหน่วยเป็นพันดอลลาร์ เช่น 100 = 100,000 USD")
-        trade_vol = trade_vol_k * 1_000
+        trade_vol = st.number_input("ปริมาณซื้อขายลูกค้า/วัน (USD eq.)", value=100000, step=10000, key="bt_trade_vol")
         dealer_spread = st.number_input("Dealer Spread ที่เก็บจากลูกค้า (%)", value=0.5, step=0.1, key="bt_spread") / 100
 
         if "bt_prev_gx" not in st.session_state:
@@ -361,10 +358,8 @@ with st.sidebar:
             st.session_state.bt_prev_gx = global_exchange
 
         hedge_fee = st.number_input("ค่าธรรมเนียม Global CEX (%)", key="bt_hedge_fee", step=0.01) / 100
-        fx_limit_mm = st.number_input("FX Limit ต่อเดือน (ล้าน USD)", value=5.0, step=0.5,
-                                       min_value=0.01, key="bt_fx_limit",
-                                       help="กรอกหน่วยเป็นล้านดอลลาร์ เช่น 5 = 5,000,000 USD")
-        fx_limit_max = fx_limit_mm * 1_000_000
+        fx_limit_max = st.number_input("FX Limit ต่อเดือน (USD)", value=5000000, step=500000,
+                                       min_value=1, key="bt_fx_limit")
         local_premium = st.number_input(
             "Local Premium/Discount ฝั่งไทย (%)", value=0.1, step=0.1, key="bt_local_premium",
             help="ส่วนต่างราคากระดานไทยเทียบราคาโลก ค่าเริ่มต้น 0.1% สะท้อนพรีเมียมที่มักพบช่วงตลาดปกติ") / 100
@@ -749,11 +744,9 @@ with tab2:
             section("📥 พารามิเตอร์ธุรกรรม (Flow Assumptions)")
             fc1, fc2 = st.columns(2)
             with fc1:
-                monthly_volume_mb = st.number_input("ปริมาณธุรกรรมลูกค้าต่อเดือน (ล้านบาท)",
-                                                      value=300.0, step=10.0, min_value=0.0,
-                                                      key="cp_volume",
-                                                      help="กรอกหน่วยเป็นล้านบาท เช่น 300 = 300,000,000 บาท")
-                monthly_volume_thb = monthly_volume_mb * 1_000_000
+                monthly_volume_thb = st.number_input("ปริมาณธุรกรรมลูกค้าต่อเดือน (THB)",
+                                                      value=300_000_000, step=10_000_000, min_value=0,
+                                                      key="cp_volume")
                 net_bias_pct = st.slider("Net Flow Bias — ลูกค้าซื้อสุทธิ(+) / ขายสุทธิ(-)",
                                           -100, 100, 20, key="cp_bias",
                                           help="ทิศทางสุทธิที่ทำให้ต้องดองคริปโตไว้เป็นสต็อก (ฝั่ง + เท่านั้นที่กินสต็อก)") / 100
@@ -770,37 +763,67 @@ with tab2:
                                                 ["Stablecoin (ความเสี่ยงต่ำ)", "เหรียญเดียวกับที่เทรด (ความเสี่ยงเท่าคริปโต)"],
                                                 key="cp_cex_asset")
 
-            section("⚖️ เกณฑ์กำกับดูแล (ปรับได้)")
+            section("⚖️ เกณฑ์เงินกองทุน (NC) — อ้างอิงประกาศ ก.ล.ต. จริง")
+            st.caption("อ้างอิงประกาศ กธ. 28-30/2567 และ สธ. 30-32/2567 (มีผลบังคับ 1 พ.ย. 2567) "
+                       "และอัตรา NC cold wallet ที่ปรับลดเหลือ 1% (จาก 2%) ตามการปรับปรุงปี 2568 "
+                       "ตัวเลข 🔒 ด้านล่างเป็นอัตราที่ประกาศไว้จริง ส่วนตัวเลขที่ปรับได้เป็นค่าที่ยังไม่มีตัวเลขทางการ "
+                       "เผยแพร่ครบถ้วน (เช่น อัตรา cold wallet ต่างประเทศ) — ใช้เป็นค่าประมาณการเพื่อจำลองเท่านั้น "
+                       "โปรดตรวจสอบกับประกาศฉบับล่าสุดก่อนใช้อ้างอิงจริง")
+
             gc1, gc2, gc3 = st.columns(3)
             with gc1:
-                ncr_min = st.number_input("เกณฑ์ NCR ขั้นต่ำ (%)", value=7.0, step=0.5, min_value=0.1, key="cp_ncr_min")
+                is_custodian = st.checkbox("เก็บรักษาทรัพย์สินลูกค้า (Custody)", value=True,
+                                           key="cp_is_custodian",
+                                           help="กำหนดเงินกองทุนขั้นต่ำคงที่: 25 ล้านบาท หากเก็บรักษาทรัพย์สินลูกค้า, "
+                                                "5 ล้านบาท หากไม่เก็บรักษา")
+                fixed_min_nc = 25_000_000.0 if is_custodian else 5_000_000.0
+                st.metric("🔒 เงินกองทุนขั้นต่ำคงที่ (Fixed Minimum NC)", fmt_baht(fixed_min_nc))
             with gc2:
-                ncr_warn = st.number_input("เกณฑ์เตือนภัย NCR (%)", value=10.5, step=0.5,
-                                           min_value=ncr_min, key="cp_ncr_warn")
+                trading_risk_rate = st.number_input(
+                    "อัตรา NC ความเสี่ยงบริการซื้อขาย (% ของมูลค่าซื้อขายเฉลี่ย/วัน ย้อนหลัง 3 เดือน)",
+                    value=2.0, step=0.1, min_value=0.0, key="cp_trading_risk_rate",
+                    help="ตามประกาศ กำหนดไม่น้อยกว่า 2% ของมูลค่าซื้อขายเฉลี่ยต่อวันย้อนหลัง 3 เดือน "
+                         "(ใช้ปริมาณธุรกรรม/วันด้านล่างเป็นตัวแทนค่าเฉลี่ย 3 เดือน)") / 100
             with gc3:
-                cex_counterparty_haircut = st.number_input("Counterparty Haircut กรณี Margin เป็น Stablecoin (%)",
-                                                            value=2.0, step=0.5, min_value=0.0, key="cp_cex_hc") / 100
-            st.caption("⚠️ ตัวเลขเกณฑ์ NCR ด้านบนเป็นค่าตั้งต้นสำหรับจำลองเท่านั้น — ก่อนใช้อ้างอิงจริงต้องตรวจสอบ "
-                       "ประกาศ ก.ล.ต. ฉบับล่าสุด เครื่องมือนี้ไม่ยืนยันว่าเป็นตัวเลขกำกับดูแลปัจจุบัน")
+                cold_foreign_rate = st.number_input(
+                    "อัตรา NC cold wallet ต่างประเทศ โดยประมาณ (%)",
+                    value=2.0, step=0.5, min_value=1.0, key="cp_cold_foreign_rate",
+                    help="ประกาศระบุเพียงว่าอัตรานี้ 'สูงกว่า' กรณีฝากในประเทศ (1%) แต่ไม่ได้เผยแพร่ตัวเลขที่แน่นอน "
+                         "— ค่านี้เป็นการประมาณเพื่อจำลองเท่านั้น ปรับได้ตามข้อมูลจริงที่หาเพิ่มเติมได้") / 100
+
+            hot_wallet_nc_rate = 1.00      # 100% ของมูลค่า — ตามประกาศ (คงที่ ไม่ปรับ)
+            cold_domestic_rate = 0.01      # 1% ของมูลค่า — อัตราปรับปรุงปี 2568 (คงที่ ไม่ปรับ)
+
+            gc4, gc5 = st.columns(2)
+            with gc4:
+                hot_wallet_pct = st.slider("สัดส่วนสต็อกเหรียญที่เก็บใน Hot Wallet (%)", 0, 100, 50,
+                                           key="cp_hot_pct",
+                                           help="ส่วนที่เหลือถือเป็น Cold Wallet — ยิ่งเก็บใน Hot Wallet มาก "
+                                                "ยิ่งต้องดำรง NC สูง (100% เทียบกับ 1% ของ Cold Wallet ในประเทศ)") / 100
+            with gc5:
+                cold_domestic_split_pct = st.slider("สัดส่วน Cold Wallet ที่ฝากในประเทศ (%)", 0, 100, 100,
+                                                    key="cp_cold_domestic_pct",
+                                                    help="ฝากในประเทศ = อัตรา NC 1% (🔒) / ฝากต่างประเทศ = อัตราประมาณการด้านบน") / 100
+            cex_counterparty_haircut = st.number_input("Counterparty Haircut กรณี CEX Margin เป็น Stablecoin (%)",
+                                                        value=2.0, step=0.5, min_value=0.0, key="cp_cex_hc") / 100
+
+            st.caption(f"🔒 อัตราคงที่ตามประกาศ: Hot wallet NC = {hot_wallet_nc_rate*100:.0f}% ของมูลค่า · "
+                      f"Cold wallet ในประเทศ NC = {cold_domestic_rate*100:.0f}% ของมูลค่า · "
+                      f"เงินกองทุนขั้นต่ำคงที่ = {fmt_baht(fixed_min_nc)}")
 
             section("💼 เงินทุนที่มี (Capital Pool)")
             bc1, bc2, bc3 = st.columns(3)
             with bc1:
-                total_capital_mb = st.number_input(
-                    "เงินทุนสภาพคล่องรวม (ล้านบาท)", value=150.0, step=5.0, min_value=0.0,
+                total_capital_thb = st.number_input(
+                    "เงินทุนสภาพคล่องรวม (THB)", value=150_000_000, step=5_000_000, min_value=0,
                     key="cp_total_capital",
-                    help="กรอกหน่วยเป็นล้านบาท เช่น 150 = 150,000,000 บาท — เงินสดทั้งหมดก่อนจัดสรรไปเป็นสต็อกเหรียญ")
-                total_capital_thb = total_capital_mb * 1_000_000
+                    help="เงินสดทั้งหมดก่อนจัดสรรไปเป็นสต็อกเหรียญ (ระบบจะคำนวณให้ว่าควรแบ่งเป็นเงินสด/สต็อกเท่าไหร่)")
             with bc2:
-                cex_margin_mb = st.number_input("เงินทุนบนกระดานโลก / CEX Margin (ล้านบาท)",
-                                                 value=40.0, step=1.0, min_value=0.0, key="cp_cex_margin",
-                                                 help="กรอกหน่วยเป็นล้านบาท เช่น 40 = 40,000,000 บาท")
-                cex_margin_thb = cex_margin_mb * 1_000_000
+                cex_margin_thb = st.number_input("เงินทุนบนกระดานโลก / CEX Margin (THB)",
+                                                 value=40_000_000, step=1_000_000, min_value=0, key="cp_cex_margin")
             with bc3:
-                liab_mb = st.number_input("หนี้สินต่อลูกค้า (ล้านบาท)", value=200.0, step=5.0,
-                                           min_value=0.01, key="cp_liab",
-                                           help="กรอกหน่วยเป็นล้านบาท เช่น 200 = 200,000,000 บาท")
-                liab_thb = liab_mb * 1_000_000
+                liab_thb = st.number_input("หนี้สินต่อลูกค้า (THB)", value=200_000_000, step=5_000_000,
+                                           min_value=1, key="cp_liab")
 
             # ---------- CORE CALC ----------
             h_crypto = float(min(rp["es99"] * np.sqrt(settlement_days), 0.95))
@@ -818,39 +841,66 @@ with tab2:
 
             nlc_thb = (cash_after_stock_thb + required_stock_thb * (1 - h_crypto)
                        + cex_margin_thb * (1 - h_cex) - liab_thb)
-            ncr_pct = (nlc_thb / liab_thb * 100.0) if liab_thb > 0 else float("nan")
+
+            # ---------- NC ตามเกณฑ์จริง: เงินกองทุนขั้นต่ำที่ต้องดำรง ----------
+            hot_wallet_thb = required_stock_thb * hot_wallet_pct
+            cold_wallet_thb = required_stock_thb * (1 - hot_wallet_pct)
+            cold_domestic_thb = cold_wallet_thb * cold_domestic_split_pct
+            cold_foreign_thb = cold_wallet_thb * (1 - cold_domestic_split_pct)
+
+            custody_risk_nc = (hot_wallet_thb * hot_wallet_nc_rate
+                                + cold_domestic_thb * cold_domestic_rate
+                                + cold_foreign_thb * cold_foreign_rate)
+            trading_service_risk_nc = trading_risk_rate * daily_vol_thb
+            required_nc_total = fixed_min_nc + trading_service_risk_nc + custody_risk_nc
+
+            nc_buffer_thb = nlc_thb - required_nc_total
+            ncr_pct = (nlc_thb / required_nc_total * 100.0) if required_nc_total > 0 else float("nan")
+            # หมายเหตุ: ncr_pct ที่นี่คือ "NC Coverage" = NC จริง / NC ขั้นต่ำที่ต้องดำรง × 100%
+            # ไม่ใช่ NCR แบบร้อยละของหนี้สินแบบเดิม — ตัวชี้วัดที่ใช้ตัดสินผ่าน/ไม่ผ่านคือ nc_buffer_thb (ต้อง ≥ 0)
+
+            hot_wallet_cap_breach = (liab_thb < 1_000_000_000) and (hot_wallet_pct > 0.50)
 
             # ---------- MAX CAPACITY ----------
-            if a_factor > 0 and h_crypto > 0:
-                rhs = (total_capital_thb + cex_margin_thb * (1 - h_cex)
-                       - liab_thb * (1 + ncr_min / 100.0))
-                v_ncr_thb = max(0.0, rhs / (a_factor * h_crypto))
+            # แก้สมการ NLC(V) = Required_NC(V) แทนที่จะใช้เกณฑ์ NCR% แบบเดิม
+            # ทั้ง custody NC และ trading-service NC ต่างก็แปรผันตามปริมาณธุรกรรม V
+            blended_custody_rate = (hot_wallet_pct * hot_wallet_nc_rate
+                                     + (1 - hot_wallet_pct) * (cold_domestic_split_pct * cold_domestic_rate
+                                                                + (1 - cold_domestic_split_pct) * cold_foreign_rate))
+            slope = a_factor * (h_crypto + blended_custody_rate) + trading_risk_rate / 30.0
+            if slope > 0:
+                rhs = (total_capital_thb + cex_margin_thb * (1 - h_cex) - liab_thb - fixed_min_nc)
+                v_nc_thb = max(0.0, rhs / slope)
             else:
-                v_ncr_thb = float("inf")
+                v_nc_thb = float("inf")
             v_cash_thb = (total_capital_thb / a_factor) if a_factor > 0 else float("inf")
-            capital_max_v_thb = min(v_ncr_thb, v_cash_thb)
+            capital_max_v_thb = min(v_nc_thb, v_cash_thb)
 
             fx_max_v_thb = fx_limit_max * usdthb_now
             overall_max_v_thb = min(capital_max_v_thb, fx_max_v_thb)
-            binding_side = "ทุน / NCR" if capital_max_v_thb < fx_max_v_thb else "FX Limit"
+            binding_side = "ทุน / NC" if capital_max_v_thb < fx_max_v_thb else "FX Limit"
 
             coin_price_thb = (spot_usd * usdthb_now) if spot_usd else None
 
             # ---------- SUMMARY VERDICT ----------
             section("🧾 สรุปผลสำหรับผู้บริหาร")
-            ok_ncr = (not pd.isna(ncr_pct)) and (ncr_pct >= ncr_min)
-            warn_ncr = ok_ncr and (ncr_pct < ncr_warn)
-            if pd.isna(ncr_pct):
-                verdict_box(False, "คำนวณ NCR ไม่ได้", "หนี้สินต่อลูกค้าต้องมากกว่า 0")
-            else:
-                verdict_box(
-                    ok_ncr,
-                    f"NCR โดยประมาณ = {ncr_pct:.2f}%  (เกณฑ์ขั้นต่ำ {ncr_min:.1f}% / เตือนภัย {ncr_warn:.1f}%)",
-                    f"ที่ปริมาณธุรกรรม {fmt_baht(monthly_volume_thb)}/เดือน ต้องดองสต็อกเหรียญ "
-                    f"{fmt_baht(required_stock_thb)} เหลือเงินสด {fmt_baht(cash_after_stock_thb)}"
-                    + (" — เงินสดติดลบ แปลว่าทุนไม่พอสำหรับปริมาณนี้!" if cash_after_stock_thb < 0 else ""),
-                    warn=warn_ncr,
-                )
+            ok_nc = (not pd.isna(nc_buffer_thb)) and (nc_buffer_thb >= 0)
+            warn_nc = ok_nc and (ncr_pct < 150.0)   # ส่วนเกินเหลือน้อยกว่า 50% ของ NC ขั้นต่ำ = เข้าเขตเตือนภัย
+            verdict_box(
+                ok_nc,
+                f"NC จริง {fmt_baht(nlc_thb)} เทียบกับ NC ขั้นต่ำที่ต้องดำรง {fmt_baht(required_nc_total)} "
+                f"→ {'ผ่านเกณฑ์' if ok_nc else 'ไม่ผ่านเกณฑ์'} (ส่วนเกิน/ขาด {fmt_baht(nc_buffer_thb, force_sign=True)})",
+                f"NC ขั้นต่ำ = เงินกองทุนขั้นต่ำคงที่ {fmt_baht(fixed_min_nc)} + ความเสี่ยงบริการซื้อขาย "
+                f"{fmt_baht(trading_service_risk_nc)} + ความเสี่ยงเก็บรักษาทรัพย์สิน {fmt_baht(custody_risk_nc)} "
+                f"(ที่ปริมาณธุรกรรม {fmt_baht(monthly_volume_thb)}/เดือน ต้องดองสต็อกเหรียญ {fmt_baht(required_stock_thb)} "
+                f"เหลือเงินสด {fmt_baht(cash_after_stock_thb)})"
+                + (" — เงินสดติดลบ แปลว่าทุนไม่พอสำหรับปริมาณนี้!" if cash_after_stock_thb < 0 else ""),
+                warn=warn_nc,
+            )
+            if hot_wallet_cap_breach:
+                verdict_box(False, "ฝ่าฝืนเพดาน Hot Wallet 50%",
+                           f"หนี้สินต่อลูกค้า {fmt_baht(liab_thb)} ต่ำกว่า 1,000 ล้านบาท "
+                           f"แต่ตั้งสัดส่วน Hot Wallet ไว้ที่ {hot_wallet_pct*100:.0f}% (เกินเพดาน 50% ตามประกาศ)")
             cap_ok = monthly_volume_thb <= overall_max_v_thb
             verdict_box(
                 cap_ok,
@@ -866,33 +916,47 @@ with tab2:
                         f"Haircut ที่ใช้ {h_crypto*100:.2f}%"
                         + (f" · ≈ {required_stock_thb/coin_price_thb:,.4f} {asset}" if coin_price_thb else ""))
             metric_card(k1[1], "เงินสดคงเหลือหลังจัดสรร", fmt_baht(cash_after_stock_thb), cash_after_stock_thb)
-            metric_card(k1[2], "Net Liquid Capital (NLC)", fmt_baht(nlc_thb), nlc_thb)
-            metric_card(k1[3], "NCR", f"{ncr_pct:.2f}%" if not pd.isna(ncr_pct) else "N/A",
-                        (ncr_pct - ncr_min) if not pd.isna(ncr_pct) else None,
-                        f"ห่างจากเกณฑ์ขั้นต่ำ {ncr_pct-ncr_min:+.2f} pp" if not pd.isna(ncr_pct) else None)
+            metric_card(k1[2], "Net Capital (NC) จริง", fmt_baht(nlc_thb), nlc_thb)
+            metric_card(k1[3], "NC ขั้นต่ำที่ต้องดำรง", fmt_baht(required_nc_total), nc_buffer_thb,
+                        f"ส่วนเกิน/ขาด {fmt_baht(nc_buffer_thb, force_sign=True)} ({ncr_pct:.0f}% ของ NC ขั้นต่ำ)"
+                        if not pd.isna(ncr_pct) else None)
 
             k2 = st.columns(4)
-            metric_card(k2[0], "Haircut คริปโต (h)", f"{h_crypto*100:.2f}%", sub_text=f"= ES99% × √{settlement_days} วัน")
-            metric_card(k2[1], "Haircut CEX Margin", f"{h_cex*100:.2f}%")
-            metric_card(k2[2], "เพดานฝั่งทุน/NCR", fmt_baht(capital_max_v_thb))
+            metric_card(k2[0], "เงินกองทุนขั้นต่ำคงที่", fmt_baht(fixed_min_nc))
+            metric_card(k2[1], "NC ความเสี่ยงบริการซื้อขาย", fmt_baht(trading_service_risk_nc),
+                        sub_text=f"= {trading_risk_rate*100:.1f}% × มูลค่าซื้อขายเฉลี่ย/วัน")
+            metric_card(k2[2], "NC ความเสี่ยงเก็บรักษาทรัพย์สิน", fmt_baht(custody_risk_nc),
+                        sub_text=f"Hot {fmt_baht(hot_wallet_thb)} × {hot_wallet_nc_rate*100:.0f}% + "
+                                  f"Cold {fmt_baht(cold_wallet_thb)} × ~{(cold_domestic_split_pct*cold_domestic_rate+(1-cold_domestic_split_pct)*cold_foreign_rate)*100:.2f}%")
             metric_card(k2[3], "เพดานฝั่ง FX Limit", fmt_baht(fx_max_v_thb),
                         sub_text=f"FX Limit {fx_limit_max:,.0f} USD × {usdthb_now:.2f}")
+
+            k3 = st.columns(4)
+            metric_card(k3[0], "Haircut คริปโต (h)", f"{h_crypto*100:.2f}%", sub_text=f"= ES99% × √{settlement_days} วัน")
+            metric_card(k3[1], "Haircut CEX Margin", f"{h_cex*100:.2f}%")
+            metric_card(k3[2], "เพดานฝั่งทุน/NC", fmt_baht(capital_max_v_thb))
+            metric_card(k3[3], "สถานะ Hot Wallet Cap", "ฝ่าฝืน 🚨" if hot_wallet_cap_breach else "ปกติ ✅",
+                        sub_text="เพดาน 50% ใช้เมื่อทรัพย์สินลูกค้ารวม < 1,000 ล้านบาท")
 
             with st.expander("📐 สูตรที่ใช้คำนวณ (สำหรับอ้างอิงในห้องประชุม)"):
                 st.markdown(f"""
 **Safety Stock** (สต็อกเหรียญที่ต้องดำรงไว้):
 `I* = max(0, net_bias) × V/30 × L + z_α × (CV × V/30) × √L`
 
-**Net Liquid Capital & NCR:**
-`NLC = Cash + I×(1−h_crypto) + M×(1−h_CEX) − L_liab`
-`NCR = NLC / L_liab × 100`
+**Net Capital (NC) จริง — ประมาณจากงบดุลสภาพคล่อง:**
+`NC_actual = Cash + I×(1−h_crypto) + M×(1−h_CEX) − L_liab`
+
+**NC ขั้นต่ำที่ต้องดำรง (ตามประกาศ ก.ล.ต.):**
+`NC_required = Fixed_Min_NC + (trading_risk_rate × Daily_Volume) + Custody_Risk_NC`
+`Custody_Risk_NC = Hot×100% + Cold_domestic×1% + Cold_foreign×{cold_foreign_rate*100:.1f}%`
+เกณฑ์ผ่าน: **NC_actual ≥ NC_required** (เปรียบเทียบเป็นมูลค่าสัมบูรณ์ ไม่ใช่ร้อยละของหนี้สิน)
 
 **Haircut จากข้อมูลจริง (ไม่ใช่เลขเดา):**
 `h_crypto = ES99% × √L` (capped ที่ 95%)
 
-**เพดานธุรกรรมสูงสุด** (ให้ NCR ≥ เกณฑ์ขั้นต่ำ พร้อมกันกับเงินสดไม่ติดลบ):
-`V_max = min( [Capital + M(1−h_CEX) − L_liab×(1+NCR_min/100)] / (a×h_crypto),  Capital/a,  FX_Limit×USDTHB )`
-โดย `a = [max(0,net_bias)×L + z_α×CV×√L] / 30`
+**เพดานธุรกรรมสูงสุด** (ให้ NC_actual ≥ NC_required พร้อมกันกับเงินสดไม่ติดลบ):
+`V_max = min( [Capital + M(1−h_CEX) − L_liab − Fixed_Min_NC] / [a×(h_crypto+blended_custody_rate) + trading_risk_rate/30],  Capital/a,  FX_Limit×USDTHB )`
+โดย `a = [max(0,net_bias)×L + z_α×CV×√L] / 30`, `blended_custody_rate = {blended_custody_rate*100:.3f}%`
 
 ค่าที่ใช้ตอนนี้: L = {settlement_days} วัน, z_α = {z_alpha:.3f} ({confidence}%), 
 CV = {flow_cv_pct*100:.0f}%, net_bias = {net_bias_pct*100:+.0f}%, h_crypto = {h_crypto*100:.2f}%
@@ -908,33 +972,35 @@ CV = {flow_cv_pct*100:.0f}%, net_bias = {net_bias_pct*100:+.0f}%, h_crypto = {h_
             hist_returns = rp["returns"]
             crypto_val_series = required_stock_thb * np.exp(hist_returns)
             nlc_series = cash_after_stock_thb + crypto_val_series + cex_margin_thb - liab_thb
-            ncr_series = nlc_series / liab_thb * 100.0 if liab_thb > 0 else pd.Series(dtype=float)
-            breach_mask = ncr_series < ncr_min
+            # custody NC ขั้นต่ำก็แปรผันตามมูลค่าคริปโตที่ถืออยู่จริงในแต่ละวันด้วย (ไม่ใช่ค่าคงที่)
+            custody_nc_series = crypto_val_series * blended_custody_rate
+            required_nc_series = fixed_min_nc + trading_service_risk_nc + custody_nc_series
+            nc_buffer_series = nlc_series - required_nc_series
+            breach_mask = nc_buffer_series < 0
             breach_days = int(breach_mask.sum())
-            breach_pct = breach_days / len(ncr_series) * 100.0 if len(ncr_series) else 0.0
+            breach_pct = breach_days / len(nc_buffer_series) * 100.0 if len(nc_buffer_series) else 0.0
 
             hr = st.columns(3)
-            metric_card(hr[0], "จำนวนวันในประวัติศาสตร์ที่ทดสอบ", f"{len(ncr_series):,} วัน")
-            metric_card(hr[1], "วันที่ NCR จะหลุดเกณฑ์ขั้นต่ำ", f"{breach_days:,} วัน",
+            metric_card(hr[0], "จำนวนวันในประวัติศาสตร์ที่ทดสอบ", f"{len(nc_buffer_series):,} วัน")
+            metric_card(hr[1], "วันที่ NC จะหลุดเกณฑ์ขั้นต่ำ", f"{breach_days:,} วัน",
                         -1 if breach_days else 0, f"{breach_pct:.2f}% ของวันทั้งหมด")
-            metric_card(hr[2], "NCR ต่ำสุดในประวัติศาสตร์ (จำลอง)",
-                        f"{ncr_series.min():.2f}%" if len(ncr_series) else "N/A",
-                        (ncr_series.min() - ncr_min) if len(ncr_series) else None)
+            metric_card(hr[2], "NC Buffer ต่ำสุดในประวัติศาสตร์ (จำลอง)",
+                        fmt_baht(nc_buffer_series.min()) if len(nc_buffer_series) else "N/A",
+                        nc_buffer_series.min() if len(nc_buffer_series) else None)
 
-            if len(ncr_series):
+            if len(nc_buffer_series):
                 fig_replay = go.Figure()
-                fig_replay.add_trace(go.Scatter(x=ncr_series.index, y=ncr_series.values, name="NCR (จำลองย้อนหลัง)",
+                fig_replay.add_trace(go.Scatter(x=nc_buffer_series.index, y=nc_buffer_series.values,
+                                                name="NC Buffer (จำลองย้อนหลัง)",
                                                 line=dict(color="#00D26A", width=1.6)))
-                fig_replay.add_hline(y=ncr_min, line=dict(color="#FF4B4B", dash="dash"),
-                                     annotation_text=f"เกณฑ์ขั้นต่ำ {ncr_min:.1f}%")
-                fig_replay.add_hline(y=ncr_warn, line=dict(color="#F59E0B", dash="dot"),
-                                     annotation_text=f"เตือนภัย {ncr_warn:.1f}%")
+                fig_replay.add_hline(y=0, line=dict(color="#FF4B4B", dash="dash"),
+                                     annotation_text="เกณฑ์ขั้นต่ำ (NC Buffer = 0)")
                 if breach_mask.any():
-                    bd = ncr_series[breach_mask]
+                    bd = nc_buffer_series[breach_mask]
                     fig_replay.add_trace(go.Scatter(x=bd.index, y=bd.values, mode="markers",
                                                     name="หลุดเกณฑ์", marker=dict(color="#FF4B4B", size=5, symbol="x")))
                 fig_replay.update_layout(template="plotly_dark", height=420, hovermode="x unified",
-                                         margin=dict(t=30, b=20), yaxis_title="NCR (%)",
+                                         margin=dict(t=30, b=20), yaxis_title="NC Buffer (THB)",
                                          legend=dict(orientation="h", y=1.05, yanchor="bottom"))
                 st.plotly_chart(fig_replay, **WIDE)
 
@@ -943,32 +1009,36 @@ CV = {flow_cv_pct*100:.0f}%, net_bias = {net_bias_pct*100:+.0f}%, h_crypto = {h_
             # =====================================================
             section("🧨 Stress Test — 6 สถานการณ์")
 
-            def _scenario_ncr(crypto_val, extra_haircut_mult=1.0, extra_stock=0.0):
+            def _scenario_nc_buffer(crypto_val, extra_haircut_mult=1.0, extra_stock=0.0):
                 h_eff = min(h_crypto * extra_haircut_mult, 0.99)
                 cv = crypto_val + extra_stock
                 nlc_s = cash_after_stock_thb + cv * (1 - h_eff) + cex_margin_thb * (1 - h_cex) - liab_thb
-                return (nlc_s / liab_thb * 100.0) if liab_thb > 0 else float("nan")
+                custody_nc_s = cv * blended_custody_rate  # NC ขั้นต่ำฝั่ง custody ก็เปลี่ยนตามมูลค่าคริปโตที่ถืออยู่จริง
+                required_s = fixed_min_nc + trading_service_risk_nc + custody_nc_s
+                return nlc_s - required_s
 
             extra_flow = daily_vol_thb * 3.0     # bank run: ลูกค้าเทขาย 3 เท่าปริมาณเฉลี่ยรายวัน ในวันเดียว
             fx_stuck = min(monthly_volume_thb, fx_max_v_thb) * 0.5  # FX limit ลดครึ่งหนึ่ง = โอนออกไม่ทันครึ่งหนึ่ง
 
             scenarios = [
-                ("ราคาร่วง -10% ใน 1 วัน", _scenario_ncr(required_stock_thb * 0.90)),
-                ("ราคาร่วง -20% ใน 1 วัน", _scenario_ncr(required_stock_thb * 0.80)),
-                ("Worst Historical Day จริง", _scenario_ncr(required_stock_thb * (1 - rp["worst"]))),
-                ("Bank Run: ลูกค้าเทขาย 3× ปริมาณเฉลี่ย/วัน", _scenario_ncr(required_stock_thb, extra_stock=extra_flow)),
-                ("FX Limit ถูกตัดเหลือครึ่งหนึ่ง (โอนออกไม่ทัน)", _scenario_ncr(required_stock_thb, extra_stock=fx_stuck)),
+                ("ราคาร่วง -10% ใน 1 วัน", _scenario_nc_buffer(required_stock_thb * 0.90)),
+                ("ราคาร่วง -20% ใน 1 วัน", _scenario_nc_buffer(required_stock_thb * 0.80)),
+                ("Worst Historical Day จริง", _scenario_nc_buffer(required_stock_thb * (1 - rp["worst"]))),
+                ("Bank Run: ลูกค้าเทขาย 3× ปริมาณเฉลี่ย/วัน", _scenario_nc_buffer(required_stock_thb, extra_stock=extra_flow)),
+                ("FX Limit ถูกตัดเหลือครึ่งหนึ่ง (โอนออกไม่ทัน)", _scenario_nc_buffer(required_stock_thb, extra_stock=fx_stuck)),
                 ("Liquidity Crisis: Worst Day + Haircut เพิ่มเป็น 2×",
-                 _scenario_ncr(required_stock_thb * (1 - rp["worst"]), extra_haircut_mult=2.0)),
+                 _scenario_nc_buffer(required_stock_thb * (1 - rp["worst"]), extra_haircut_mult=2.0)),
             ]
 
             sc_cols = st.columns(2)
-            for i, (label, ncr_s) in enumerate(scenarios):
+            for i, (label, buf_s) in enumerate(scenarios):
                 with sc_cols[i % 2]:
-                    ok_s = (not pd.isna(ncr_s)) and (ncr_s >= ncr_min)
-                    warn_s = ok_s and (ncr_s < ncr_warn)
-                    verdict_box(ok_s, f"{label} → NCR {ncr_s:.2f}%" if not pd.isna(ncr_s) else f"{label} → N/A",
-                               f"เกณฑ์ขั้นต่ำ {ncr_min:.1f}% / เตือนภัย {ncr_warn:.1f}%", warn=warn_s)
+                    ok_s = (not pd.isna(buf_s)) and (buf_s >= 0)
+                    warn_s = ok_s and (buf_s < 0.5 * required_nc_total)
+                    verdict_box(ok_s,
+                               f"{label} → NC Buffer {fmt_baht(buf_s, force_sign=True)}" if not pd.isna(buf_s) else f"{label} → N/A",
+                               f"เกณฑ์ผ่าน: NC จริง ≥ NC ขั้นต่ำที่ต้องดำรง ({fmt_baht(required_nc_total)})", warn=warn_s)
 
             st.caption("Stress Test ใช้เงินสด/CEX Margin/หนี้สินคงที่ตามที่ตั้งไว้ด้านบน แล้วช็อกเฉพาะฝั่งสต็อกเหรียญ/haircut "
-                       "เพื่อดูว่า NCR จะยังผ่านเกณฑ์อยู่หรือไม่ในแต่ละสถานการณ์")
+                       "และคำนวณ NC ขั้นต่ำใหม่ตามมูลค่าคริปโตที่ถืออยู่จริงในแต่ละสถานการณ์ "
+                       "เพื่อดูว่า NC Buffer จะยังเป็นบวกอยู่หรือไม่")
