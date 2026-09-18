@@ -315,11 +315,13 @@ def fetch_price_data(ticker, start, end):
     return df, None
 
 def apply_fx_limit(hedge_usd: pd.Series, index: pd.DatetimeIndex, fx_limit: float):
+    """All-or-nothing monthly FX quota used by the legacy backtest engine."""
     allowed, usage, used, cur_month = [], [], 0.0, None
-    for ts, cost in zip(index, hedge_usd.values):
-        m = ts.to_period("M")
-        if m != cur_month:
-            cur_month, used = m, 0.0
+    fx_limit = max(0.0, float(fx_limit))
+    for ts, cost in zip(index, hedge_usd.fillna(0.0).clip(lower=0.0).values):
+        month = ts.to_period("M")
+        if month != cur_month:
+            cur_month, used = month, 0.0
         if used + cost <= fx_limit:
             used += cost
             allowed.append(1)
@@ -331,6 +333,30 @@ def apply_fx_limit(hedge_usd: pd.Series, index: pd.DatetimeIndex, fx_limit: floa
 # =========================================================
 # RISK ENGINE
 # =========================================================
+
+def allocate_fx_limit(required_usd: pd.Series, index: pd.DatetimeIndex, fx_limit: float):
+    """Allocate monthly FX quota proportionally, allowing partial hedge."""
+    ratios, usage, hits = [], [], []
+    used, cur_month = 0.0, None
+    fx_limit = max(0.0, float(fx_limit))
+
+    for ts, required in zip(index, required_usd.fillna(0.0).clip(lower=0.0).values):
+        month = ts.to_period("M")
+        if month != cur_month:
+            cur_month, used = month, 0.0
+
+        required = float(required)
+        available = max(0.0, fx_limit - used)
+        allocated = min(required, available)
+        ratio = allocated / required if required > 0 else 1.0
+
+        used += allocated
+        ratios.append(ratio)
+        usage.append(used)
+        hits.append(int(required > available + 1e-12))
+
+    return np.array(ratios), np.array(usage), np.array(hits)
+
 def _risk_stats(r: pd.Series) -> dict | None:
     r = r.replace([np.inf, -np.inf], np.nan).dropna()
     if len(r) < 30: return None
@@ -490,57 +516,150 @@ with tab1:
         st.error(f"⚠️ {data_err or 'ไม่สามารถโหลดข้อมูลได้'}")
     else:
         bt = data.copy()
+        # Flow split: +100% net bias = all buy; 0% = balanced; -100% = all sell.
+        buy_share = float(np.clip((1.0 + net_bias_pct) / 2.0, 0.0, 1.0))
+        sell_share = 1.0 - buy_share
+
         bt["Local_THB"] = bt["Global_USD"] * bt["USDTHB"] * (1 + local_premium)
+        bt["Buy_Volume_USD"] = trade_vol * buy_share
+        bt["Sell_Volume_USD"] = trade_vol * sell_share
         bt["Coin_Volume"] = trade_vol / bt["Global_USD"]
         bt["Gross_Notional_THB"] = bt["Coin_Volume"] * bt["Local_THB"]
+
         bt["Spread_Revenue_THB"] = bt["Gross_Notional_THB"] * dealer_spread
-        bt["FX_Basis_PnL_THB"] = trade_vol * bt["USDTHB"] * local_premium
-        bt["Hedge_Fee_Cost_THB"] = trade_vol * hedge_fee * bt["USDTHB"]
-        bt["Hedge_Notional_USD"] = trade_vol * (1 + hedge_fee)
-        bt["KTB_FX_Benefit_THB"] = trade_vol * bt["USDTHB"] * (ktb_fx_spread_bps / 10000.0)
+
+        # Premium/basis is earned on net customer flow direction, not on both sides simultaneously.
+        bt["FX_Basis_PnL_THB"] = (
+            (bt["Buy_Volume_USD"] - bt["Sell_Volume_USD"])
+            * bt["USDTHB"] * local_premium
+        )
+
+        # Only Buy-side hedge is assumed to consume outbound FX quota.
+        bt["FX_Limit_Required_USD"] = bt["Buy_Volume_USD"] * (1 + hedge_fee)
+        bt["Hedge_Requested_USD"] = trade_vol
+        buy_ratio, fx_usage, fx_hit = allocate_fx_limit(
+            bt["FX_Limit_Required_USD"], bt.index, fx_limit_max
+        )
+        bt["Buy_Hedge_Executed_USD"] = bt["Buy_Volume_USD"] * buy_ratio
+        bt["Sell_Hedge_Executed_USD"] = bt["Sell_Volume_USD"]
+        bt["Hedge_Notional_USD"] = (
+            bt["Buy_Hedge_Executed_USD"] + bt["Sell_Hedge_Executed_USD"]
+        )
+        bt["Hedge_Coverage"] = np.where(
+            bt["Hedge_Requested_USD"] > 0,
+            bt["Hedge_Notional_USD"] / bt["Hedge_Requested_USD"],
+            1.0,
+        )
+        bt["Unhedged_Exposure_THB"] = (
+            (bt["Buy_Volume_USD"] - bt["Buy_Hedge_Executed_USD"]) * bt["USDTHB"]
+        )
 
         if asset in STABLECOINS:
             bt["Depeg_Deviation"] = peg_target - bt["Global_USD"]
-            bt["Depeg_PnL_THB"] = bt["Coin_Volume"] * bt["Depeg_Deviation"] * bt["USDTHB"] * depeg_capture_pct
-            bt["Carry_Yield_THB"] = trade_vol * (carry_apy / 365) * bt["USDTHB"]
+            # Do not turn an adverse deviation into automatic arbitrage profit.
+            bt["Depeg_PnL_THB"] = (
+                bt["Coin_Volume"]
+                * bt["Depeg_Deviation"].clip(lower=0)
+                * bt["USDTHB"]
+                * depeg_capture_pct
+            )
+            bt["Carry_Yield_THB"] = (
+                trade_vol * (carry_apy / 365) * bt["USDTHB"]
+            )
             bt["Slippage_Cost_THB"] = 0.0
         else:
-            bt["Depeg_Deviation"] = 0.0; bt["Depeg_PnL_THB"] = 0.0; bt["Carry_Yield_THB"] = 0.0
-            bt["Slippage_Cost_THB"] = trade_vol * bt["Volatility_Pct"] * slippage_sensitivity * bt["USDTHB"]
+            bt["Depeg_Deviation"] = 0.0
+            bt["Depeg_PnL_THB"] = 0.0
+            bt["Carry_Yield_THB"] = 0.0
+            bt["Slippage_Cost_THB"] = 0.0
 
-        bt["Trading_Fee_Revenue_THB"] = bt["Gross_Notional_THB"] * LOCAL_TRADING_FEE_PCT if include_trading_fee_revenue else 0.0
-        wd_network_cost = WITHDRAWAL_FEE_TABLE.get(asset, 0.0) * bt["Global_USD"] * bt["USDTHB"] * settlements_per_day
-        bt["Withdrawal_Fee_Markup_Revenue_THB"] = wd_network_cost * withdrawal_fee_markup_pct
-        bt["THB_WD_Fee"] = bt["USDTHB"].map(lambda fx: calc_thb_withdrawal_fee(trade_vol * fx, bank_type, ktb_wd_fee_thb))
-        bt["THB_Fee_Markup_Revenue_THB"] = bt["THB_WD_Fee"] * settlements_per_day * withdrawal_fee_markup_pct
-        bt["Fee_Revenue_THB"] = bt["Trading_Fee_Revenue_THB"] + bt["Withdrawal_Fee_Markup_Revenue_THB"] + bt["THB_Fee_Markup_Revenue_THB"]
-        bt["Revenue_THB"] = bt["Spread_Revenue_THB"] + bt["FX_Basis_PnL_THB"] + bt["Fee_Revenue_THB"] + bt["Depeg_PnL_THB"] + bt["Carry_Yield_THB"] + bt["KTB_FX_Benefit_THB"]
+        bt["Trading_Fee_Revenue_THB"] = (
+            bt["Gross_Notional_THB"] * LOCAL_TRADING_FEE_PCT
+            if include_trading_fee_revenue else 0.0
+        )
+
+        wd_network_cost = (
+            WITHDRAWAL_FEE_TABLE.get(asset, 0.0)
+            * bt["Global_USD"] * bt["USDTHB"]
+            * settlements_per_day
+        )
+        bt["Withdrawal_Fee_Markup_Revenue_THB"] = (
+            wd_network_cost * withdrawal_fee_markup_pct
+        )
+        bt["THB_WD_Fee"] = bt["USDTHB"].map(
+            lambda fx: calc_thb_withdrawal_fee(
+                trade_vol * fx, bank_type, ktb_wd_fee_thb
+            )
+        )
+        bt["THB_Fee_Markup_Revenue_THB"] = (
+            bt["THB_WD_Fee"] * settlements_per_day * withdrawal_fee_markup_pct
+        )
+        bt["Fee_Revenue_THB"] = (
+            bt["Trading_Fee_Revenue_THB"]
+            + bt["Withdrawal_Fee_Markup_Revenue_THB"]
+            + bt["THB_Fee_Markup_Revenue_THB"]
+        )
+
+        bt["Hedge_Fee_Cost_THB"] = (
+            bt["Hedge_Notional_USD"] * hedge_fee * bt["USDTHB"]
+        )
+        if asset not in STABLECOINS:
+            bt["Slippage_Cost_THB"] = (
+                bt["Hedge_Notional_USD"]
+                * bt["Volatility_Pct"]
+                * slippage_sensitivity
+                * bt["USDTHB"]
+            )
+
+        # KTB FX benefit only applies to actual Buy-side FX conversion.
+        bt["KTB_FX_Benefit_THB"] = (
+            bt["Buy_Hedge_Executed_USD"]
+            * bt["USDTHB"]
+            * (ktb_fx_spread_bps / 10000.0)
+        )
+
+        bt["Revenue_THB"] = (
+            bt["Spread_Revenue_THB"]
+            + bt["FX_Basis_PnL_THB"]
+            + bt["Fee_Revenue_THB"]
+            + bt["Depeg_PnL_THB"]
+            + bt["Carry_Yield_THB"]
+            + bt["KTB_FX_Benefit_THB"]
+        )
         bt["Cost_THB"] = bt["Hedge_Fee_Cost_THB"] + bt["Slippage_Cost_THB"]
         bt["Daily_PnL_THB"] = bt["Revenue_THB"] - bt["Cost_THB"]
 
-        allowed, usage = apply_fx_limit(bt["Hedge_Notional_USD"], bt.index, fx_limit_max)
-        bt["Trade_Allowed"], bt["Current_FX_Usage"] = allowed, usage
-        bt["FX_Limit_Hit"] = 1 - allowed
-        bt["Actual_Daily_PnL"] = np.where(allowed == 1, bt["Daily_PnL_THB"], 0.0)
+        bt["FX_Usage_USD"] = fx_usage
+        bt["FX_Limit_Hit"] = fx_hit
+        bt["Actual_Daily_PnL"] = bt["Daily_PnL_THB"]
         bt["Actual_Cum_PnL"] = bt["Actual_Daily_PnL"].cumsum()
 
-        traded = bt[bt["Trade_Allowed"] == 1]
-        total_revenue_thb, total_cost_thb = traded["Revenue_THB"].sum(), traded["Cost_THB"].sum()
-        net_pnl_thb, total_notional = bt["Actual_Cum_PnL"].iloc[-1], traded["Gross_Notional_THB"].sum()
+        traded = bt[bt["Hedge_Notional_USD"] > 0]
+        total_revenue_thb = bt["Revenue_THB"].sum()
+        total_cost_thb = bt["Cost_THB"].sum()
+        net_pnl_thb = bt["Actual_Cum_PnL"].iloc[-1]
+        total_notional = bt["Gross_Notional_THB"].sum()
         margin_bps = (net_pnl_thb / total_notional * 10000) if total_notional else 0
-        total_days, traded_days = len(bt), int(allowed.sum())
+        total_days, traded_days = len(bt), int((bt["Hedge_Notional_USD"] > 0).sum())
         limit_hit_days = int(bt["FX_Limit_Hit"].sum())
         win_days = int((bt["Actual_Daily_PnL"] > 0).sum())
-        win_rate = win_days / traded_days * 100 if traded_days else 0
-        avg_daily_pnl = traded["Daily_PnL_THB"].mean() if traded_days else 0
+        win_rate = win_days / total_days * 100 if total_days else 0
+        avg_daily_pnl = bt["Actual_Daily_PnL"].mean() if total_days else 0
         best_day, worst_day = bt["Actual_Daily_PnL"].max(), bt["Actual_Daily_PnL"].min()
         running_max = bt["Actual_Cum_PnL"].cummax()
         max_drawdown = (bt["Actual_Cum_PnL"] - running_max).min()
-        dd_series = (bt["Actual_Cum_PnL"] - running_max) / running_max.where(running_max > 0)
-        dd_pct = dd_series.min() * 100
-        dd_pct = 0.0 if pd.isna(dd_pct) else dd_pct
+
+        equity = total_capital_thb + bt["Actual_Cum_PnL"]
+        peak_equity = equity.cummax()
+        dd_pct_series = np.where(
+            peak_equity > 0,
+            (equity - peak_equity) / peak_equity,
+            np.nan,
+        )
+        dd_pct = float(np.nanmin(dd_pct_series) * 100) if np.any(~pd.isna(dd_pct_series)) else 0.0
         
-        st.success(f"✅ โหลดข้อมูล **{asset}** สำเร็จ ({total_days} วัน | เทรดได้จริง {traded_days} วัน)")
+        st.success(f"✅ โหลดข้อมูล **{asset}** สำเร็จ ({total_days} วัน | มี Hedge Activity {traded_days} วัน)")
+        st.caption(f"Flow mix: Buy {buy_share*100:.0f}% · Sell {sell_share*100:.0f}% · FX quota ใช้กับ Buy-side hedge เท่านั้น")
         
         section(f"📉 ราคาเรียลไทม์ — {asset}")
         tv_mode = st.radio("มุมมองกราฟ", ["กระดานไทย (Bitkub)", "กระดานโลก (Binance)", "เทียบ 2 กระดาน"], horizontal=True, key="tv_mode_bt")
@@ -560,43 +679,51 @@ with tab1:
                 st.caption(f"🌐 ราคาโลก — `{global_sym}`")
                 render_tradingview(global_sym, "tv_cmp_global", 420)
 
+        total_unhedged_thb = bt["Unhedged_Exposure_THB"].sum()
+        if total_unhedged_thb > 0:
+            verdict_box(
+                False,
+                f"⚠️ FX Limit ทำให้เกิด Unhedged Exposure สะสม {fmt_baht(total_unhedged_thb)}",
+                "Backtest ยังเดิน P&L ต่อ แต่ส่วนที่ Hedge ไม่ได้จะกลายเป็น market risk ที่ต้องบริหารแยก"
+            )
+
         section("📈 Performance Summary")
         r1 = st.columns(4)
         metric_card(r1[0], "Net P&L (THB)", fmt_baht(net_pnl_thb, True), net_pnl_thb, f"{margin_bps:,.1f} bps ของ notional", "1.7rem")
         metric_card(r1[1], "Total Revenue", fmt_baht(total_revenue_thb), total_revenue_thb, "Spread + Fee + Basis + Carry")
         metric_card(r1[2], "Total Cost", fmt_baht(total_cost_thb), -abs(total_cost_thb), "Hedge Fee + Slippage")
-        metric_card(r1[3], "Avg Daily P&L", fmt_baht(avg_daily_pnl, True), avg_daily_pnl, f"เฉลี่ยจาก {traded_days} วันที่เทรดได้")
+        metric_card(r1[3], "Avg Daily P&L", fmt_baht(avg_daily_pnl, True), avg_daily_pnl, f"เฉลี่ยจาก {total_days} วัน")
 
         r2 = st.columns(4)
         metric_card(r2[0], "Best Day", fmt_baht(best_day, True), best_day)
         metric_card(r2[1], "Worst Day", fmt_baht(worst_day, True), worst_day)
         metric_card(r2[2], "Max Drawdown", fmt_baht(max_drawdown), max_drawdown if max_drawdown != 0 else -0.01, f"{dd_pct:.2f}% จาก peak")
-        metric_card(r2[3], "Win Rate", f"{win_rate:.1f}%", None, f"{win_days}/{traded_days} วัน")
+        metric_card(r2[3], "Win Rate", f"{win_rate:.1f}%", None, f"{win_days}/{total_days} วัน")
 
         r3 = st.columns(4)
         metric_card(r3[0], "Gross Notional หมุนเวียน", fmt_baht(total_notional), None, "มูลค่าธุรกรรมรวม (ไม่ใช่กำไร)")
         metric_card(r3[1], "FX Limit Hit", f"{limit_hit_days} วัน", -1 if limit_hit_days else 0, f"{(limit_hit_days/total_days*100) if total_days else 0:.1f}% ของช่วงเวลา")
         if asset in STABLECOINS:
             metric_card(r3[2], "Avg Depeg Deviation", f"{bt['Depeg_Deviation'].mean()*100:+.3f}%")
-            metric_card(r3[3], "Total Carry Yield", fmt_baht(traded["Carry_Yield_THB"].sum()), traded["Carry_Yield_THB"].sum())
+            metric_card(r3[3], "Total Carry Yield", fmt_baht(bt["Carry_Yield_THB"].sum()), traded["Carry_Yield_THB"].sum())
         else:
             metric_card(r3[2], "Avg Daily Volatility", f"{bt['Volatility_Pct'].mean()*100:.2f}%")
-            metric_card(r3[3], "Total Slippage Cost", fmt_baht(traded["Slippage_Cost_THB"].sum()), -abs(traded["Slippage_Cost_THB"].sum()))
+            metric_card(r3[3], "Total Slippage Cost", fmt_baht(bt["Slippage_Cost_THB"].sum()), -abs(traded["Slippage_Cost_THB"].sum()))
 
         section("💧 Revenue & Cost Waterfall")
         wf_labels = ["Spread Revenue", "FX Basis P&L", "Fee Revenue"]
-        wf_values = [traded["Spread_Revenue_THB"].sum(), traded["FX_Basis_PnL_THB"].sum(), traded["Fee_Revenue_THB"].sum()]
+        wf_values = [bt["Spread_Revenue_THB"].sum(), bt["FX_Basis_PnL_THB"].sum(), bt["Fee_Revenue_THB"].sum()]
         if use_ktb_fx:
             wf_labels += ["KTB FX Benefit"]
-            wf_values += [traded["KTB_FX_Benefit_THB"].sum()]
+            wf_values += [bt["KTB_FX_Benefit_THB"].sum()]
         if asset in STABLECOINS:
             wf_labels += ["Depeg Arbitrage", "Carry Yield"]
-            wf_values += [traded["Depeg_PnL_THB"].sum(), traded["Carry_Yield_THB"].sum()]
+            wf_values += [bt["Depeg_PnL_THB"].sum(), bt["Carry_Yield_THB"].sum()]
         else:
             wf_labels += ["Slippage Cost"]
-            wf_values += [-traded["Slippage_Cost_THB"].sum()]
+            wf_values += [-bt["Slippage_Cost_THB"].sum()]
         wf_labels += ["Hedge Fee Cost", "Net P&L"]
-        wf_values += [-traded["Hedge_Fee_Cost_THB"].sum(), 0]
+        wf_values += [-bt["Hedge_Fee_Cost_THB"].sum(), net_pnl_thb]
 
         wf_text = [fmt_baht(v, True) for v in wf_values[:-1]] + [fmt_baht(sum(wf_values[:-1]), True)]
         fig_wf = go.Figure(go.Waterfall(
@@ -626,9 +753,17 @@ with tab1:
             st.plotly_chart(fig_hm, **WIDE)
 
         with st.expander("🔍 Daily Ledger (100 วันล่าสุด)"):
-            cols = ["Global_USD", "Local_THB", "USDTHB", "Volatility_Pct", "Gross_Notional_THB", "Spread_Revenue_THB", "FX_Basis_PnL_THB", "Hedge_Fee_Cost_THB", "Slippage_Cost_THB", "Fee_Revenue_THB"]
+            cols = [
+                "Global_USD", "Local_THB", "USDTHB", "Volatility_Pct",
+                "Buy_Volume_USD", "Sell_Volume_USD", "Gross_Notional_THB",
+                "Spread_Revenue_THB", "FX_Basis_PnL_THB", "Hedge_Notional_USD",
+                "Hedge_Fee_Cost_THB", "Slippage_Cost_THB", "Fee_Revenue_THB"
+            ]
             if asset in STABLECOINS: cols += ["Depeg_Deviation", "Depeg_PnL_THB", "Carry_Yield_THB"]
-            cols += ["Actual_Daily_PnL", "Current_FX_Usage", "FX_Limit_Hit"]
+            cols += [
+                "Actual_Daily_PnL", "FX_Usage_USD", "FX_Limit_Hit",
+                "Hedge_Coverage", "Unhedged_Exposure_THB"
+            ]
             ledger = bt[cols]
             st.dataframe(ledger.sort_index(ascending=False).head(100), height=400, **WIDE)
 
@@ -747,107 +882,282 @@ def _sim_defaults(asset_name, spot_usd, usdthb, target_stock_thb):
         "orders": [],
     }
 
+def _sim_config_signature(ctx, target_stock_thb):
+    """Reset accumulated simulation when model assumptions change."""
+    keys = [
+        "asset", "local_premium", "spread", "hedge_fee", "fx_limit",
+        "daily_vol", "slip_sens", "include_fee_rev", "wd_markup",
+        "wd_fee_per_coin", "bank_type", "ktb_wd_fee", "ktb_fx_bps",
+        "capital", "cex_margin", "liab", "h_crypto", "h_cex",
+        "fixed_min_nc", "trading_risk_rate", "daily_volume_thb",
+        "custody_rate", "hot_breach",
+    ]
+    return tuple(
+        round(float(ctx[k]), 10) if isinstance(ctx[k], (int, float, np.floating))
+        else ctx[k]
+        for k in keys
+    ) + (round(float(target_stock_thb), 2),)
+
 def execute_order(sim, side, amount_thb, ctx):
+    """
+    One customer transaction.
+
+    Conventions:
+      * amount_thb = gross order notional.
+      * Trading fee is a separate THB cash flow.
+      * Buy: deliver inventory; only the shortage is bought on Global CEX.
+      * Sell: receive inventory; only the amount above Target Stock is sold on CEX.
+      * Buy-side CEX purchase consumes outbound FX quota in this model.
+      * Inventory never goes negative; any uncovered Buy shortage is recorded
+        separately as Unhedged Risk.
+    """
     p = ctx
-    spot, fx = p["spot_usd"], p["usdthb"]
-    coin_price_global = spot * fx
-    mid = coin_price_global * (1 + p["local_premium"])
-    quote = mid * (1 + p["spread"]) if side == "buy" else mid * (1 - p["spread"])
-    steps = []
+    side = str(side).lower().strip()
+    if side not in {"buy", "sell"}:
+        return [], "ฝั่งคำสั่งไม่ถูกต้อง"
 
+    amount_thb = float(amount_thb)
+    spot, fx = float(p["spot_usd"]), float(p["usdthb"])
     if amount_thb < MIN_TRADE_THB:
-        steps.append(dict(n=1, t="คำสั่งถูกปฏิเสธ", s="block", note=f"มูลค่าต่ำกว่าขั้นต่ำ {MIN_TRADE_THB:,.0f} บาท"))
-        return steps, None
+        return [dict(n=1, t="คำสั่งถูกปฏิเสธ", s="block",
+                     note=f"มูลค่าต่ำกว่าขั้นต่ำ {MIN_TRADE_THB:,.0f} บาท")], None
+    if spot <= 0 or fx <= 0:
+        return [dict(n=1, t="คำสั่งถูกปฏิเสธ", s="block",
+                     note="ราคาหรือ USD/THB ไม่ถูกต้อง")], None
 
-    steps.append(dict(n=1, t="ตั้งราคาให้ลูกค้า", s="pass", note="ราคาอ้างอิงจาก Global CEX + ต้นทุนส่วนเพิ่ม",
-                      rows=[("ราคาโลก (USD)", f"$ {spot:,.2f}"), ("× เรท USD/THB", f"{fx:,.2f}"),
-                            (f"+ Local Premium {p['local_premium']*100:.2f}%", f"฿ {mid:,.2f}"),
-                            (f"{'+' if side=='buy' else '−'} Spread {p['spread']*100:.2f}%", f"฿ {quote:,.2f}")],
-                      total=("ราคาที่ลูกค้าได้", f"฿ {quote:,.2f}")))
+    global_thb = spot * fx
+    local_mid = global_thb * (1 + p["local_premium"])
+    quote = local_mid * (1 + p["spread"]) if side == "buy" else local_mid * (1 - p["spread"])
 
+    # Gross order notional stays intact. Fee is charged separately.
     trading_fee = amount_thb * LOCAL_TRADING_FEE_PCT
-    net_thb = amount_thb - trading_fee
-    coins = net_thb / quote
-    steps.append(dict(n=2, t="จับคู่และส่งมอบเข้ากระเป๋า", s="pass",
-                      note=("หักค่าธรรมเนียมฝั่งไทยแล้วโอนเหรียญเข้ากระเป๋าลูกค้าทันที" if side == "buy" else "รับเหรียญจากลูกค้า จ่ายเงินบาทออก"),
-                      rows=[("มูลค่าที่ลูกค้าใส่", fmt_baht(amount_thb)), (f"หักค่าธรรมเนียม {LOCAL_TRADING_FEE_PCT*100:.2f}%", "− " + fmt_baht(trading_fee))],
-                      total=("เหรียญที่ลูกค้าได้" if side == "buy" else "เหรียญที่ลูกค้าส่งมอบ", fmt_coin(coins, sim["asset"]))))
+    coins = amount_thb / quote
+    customer_cash_flow = amount_thb + trading_fee if side == "buy" else amount_thb - trading_fee
 
-    inv_before = sim["inv_coins"]
-    sim["inv_coins"] += (-coins if side == "buy" else coins)
-    target_coins = sim["target_thb"] / coin_price_global if coin_price_global > 0 else 0.0
-    short_coins = max(0.0, target_coins - sim["inv_coins"])
-    excess_coins = max(0.0, sim["inv_coins"] - target_coins)
-    
-    steps.append(dict(n=3, t="ตัดของจากสต็อกสำรอง" if side == "buy" else "รับของเข้าสต็อก",
-                      s="block" if sim["inv_coins"] < 0 else ("warn" if short_coins > 0 else "pass"),
-                      note=("ดึงของจาก Inventory โดยตรง ลูกค้าไม่ต้องรอ" if side == "buy" else "ของเข้ามาเติมในสต็อก"),
-                      rows=[("สต็อกก่อนหน้า", fmt_coin(inv_before)), ("การเปลี่ยนแปลง", ("− " if side == "buy" else "+ ") + fmt_coin(coins)),
-                            ("สต็อกปัจจุบัน", fmt_coin(sim["inv_coins"]))],
-                      total=("เป้าหมายสต็อก (Target)", f"{fmt_coin(target_coins)}")))
+    steps = []
+    steps.append(dict(
+        n=1, t="ตั้งราคาให้ลูกค้า", s="pass",
+        note="ราคา = Global Reference + Local Premium ± Dealer Spread",
+        rows=[
+            ("ราคาโลก (USD)", f"$ {spot:,.2f}"),
+            ("USD/THB", f"{fx:,.2f}"),
+            ("Local Mid", f"฿ {local_mid:,.2f}"),
+            ("Customer Quote", f"฿ {quote:,.2f}"),
+        ],
+        total=("Gross Notional", fmt_baht(amount_thb))
+    ))
 
-    hedge_coins = short_coins if side == "buy" else excess_coins
-    hedge_thb = hedge_coins * coin_price_global
-    hedge_usd = hedge_coins * spot * (1 + p["hedge_fee"])
-    hedged, gate = hedge_coins > 0, "ผ่าน"
+    steps.append(dict(
+        n=2, t="จับคู่และส่งมอบ", s="pass",
+        note=("ลูกค้าซื้อ: คิดค่าธรรมเนียมแยกจาก Gross Notional"
+              if side == "buy"
+              else "ลูกค้าขาย: หักค่าธรรมเนียมจากเงินบาทที่จ่าย"),
+        rows=[
+            ("Gross Notional", fmt_baht(amount_thb)),
+            (f"Trading Fee {LOCAL_TRADING_FEE_PCT*100:.2f}%", "− " + fmt_baht(trading_fee)),
+            ("Cash Flow ลูกค้า", ("− " if side == "buy" else "+ ") + fmt_baht(customer_cash_flow)),
+        ],
+        total=("เหรียญที่ลูกค้าได้" if side == "buy" else "เหรียญที่ลูกค้าส่งมอบ",
+               fmt_coin(coins, sim["asset"]))
+    ))
 
-    if side == "buy" and hedge_coins > 0:
-        if sim["fx_used_usd"] + hedge_usd > p["fx_limit"]:
-            hedged, gate = False, "FX Limit เต็ม"
-            fx_step = dict(n=5, t="ด่าน FX Limit (เพดานโอนเงินออก)", s="block",
-                           note="โควตาเต็ม ไม่สามารถโอนเงินไป Hedge ได้ ระบบต้องแบกรับความเสี่ยงราคา",
-                           rows=[("โควตาที่ใช้ไป", f"$ {sim['fx_used_usd']:,.0f}"), ("ออเดอร์นี้ต้องการใช้", f"$ {hedge_usd:,.0f}")],
-                           total=("ส่วนที่เกินเพดาน", f"$ {sim['fx_used_usd']+hedge_usd-p['fx_limit']:,.0f}"))
-        else:
-            sim["fx_used_usd"] += hedge_usd
-            fx_step = dict(n=5, t="ด่าน FX Limit (เพดานโอนเงินออก)", s="pass",
-                           note="แปลงบาทเป็นดอลลาร์เพื่อส่งออกไปซื้อคืนบนกระดานโลก",
-                           rows=[("ออเดอร์นี้ใช้โควตา", f"$ {hedge_usd:,.0f}"), ("ใช้ไปแล้วรวม", f"$ {sim['fx_used_usd']:,.0f}")],
-                           total=("โควตาคงเหลือ", f"$ {p['fx_limit']-sim['fx_used_usd']:,.0f}"))
+    # Inventory management
+    inv_before = max(0.0, float(sim["inv_coins"]))
+    target_coins = sim["target_thb"] / global_thb if global_thb > 0 else 0.0
+
+    if side == "buy":
+        inventory_used = min(inv_before, coins)
+        shortage = max(0.0, coins - inventory_used)
+        sim["inv_coins"] = inv_before - inventory_used
+        hedge_requested = shortage
+
+        steps.append(dict(
+            n=3, t="ตัดของจากสต็อกสำรอง",
+            s="warn" if shortage > 0 else "pass",
+            note=("ใช้ Inventory ก่อน แล้ว Hedge เฉพาะส่วนที่ขาด"
+                  if shortage > 0 else "Inventory เพียงพอ ไม่ต้อง Hedge เพิ่ม"),
+            rows=[
+                ("สต็อกก่อนหน้า", fmt_coin(inv_before, sim["asset"])),
+                ("ใช้จาก Inventory", "− " + fmt_coin(inventory_used, sim["asset"])),
+                ("สต็อกหลังส่งมอบ", fmt_coin(sim["inv_coins"], sim["asset"])),
+            ],
+            total=("ส่วนที่ต้อง Hedge", fmt_coin(hedge_requested, sim["asset"]))
+        ))
     else:
-        fx_step = dict(n=5, t="ด่าน FX Limit", s="pass", note="ฝั่งขายไม่กินโควตาโอนออก", 
-                       total=("โควตาคงเหลือ", f"$ {p['fx_limit']-sim['fx_used_usd']:,.0f}"))
+        sim["inv_coins"] = inv_before + coins
+        excess = max(0.0, sim["inv_coins"] - target_coins)
+        hedge_requested = excess
 
-    if hedged: sim["inv_coins"] += (hedge_coins if side == "buy" else -hedge_coins)
-    elif hedge_coins > 0 and side == "buy": sim["unhedged_thb"] += hedge_thb
+        steps.append(dict(
+            n=3, t="รับของเข้าสต็อก",
+            s="warn" if excess > 0 else "pass",
+            note=("รับเข้า Inventory แล้วขายเฉพาะส่วนเกิน Target"
+                  if excess > 0 else "รับเข้า Inventory และยังไม่เกิน Target"),
+            rows=[
+                ("สต็อกก่อนหน้า", fmt_coin(inv_before, sim["asset"])),
+                ("รับเข้า Inventory", "+ " + fmt_coin(coins, sim["asset"])),
+                ("สต็อกหลังรับเข้า", fmt_coin(sim["inv_coins"], sim["asset"])),
+            ],
+            total=("Target Stock", fmt_coin(target_coins, sim["asset"]))
+        ))
 
-    steps.append(dict(n=4, t="ระบบตัดสินใจ Hedge อัตโนมัติ", s="pass" if (hedge_coins == 0 or hedged) else "block",
-                      note="สต็อกพร่องจึงส่งคำสั่งซื้อคืนบน Global CEX" if side == "buy" else "สต็อกล้นจึงขายทิ้ง",
-                      rows=[("ปริมาณที่ส่งคำสั่ง", fmt_coin(hedge_coins, sim["asset"])), ("คิดเป็นมูลค่า", f"{fmt_baht(hedge_thb)}")],
-                      total=("สถานะ", "ไม่ต้องส่ง" if hedge_coins == 0 else ("ส่งสำเร็จ" if hedged else "ถูกบล็อกที่ FX Limit"))))
+    hedge_usd_requested = hedge_requested * spot
+    hedged_ratio = 1.0
+    fx_step_status = "pass"
+
+    # FX quota: only the Buy-side CEX purchase needs outbound FX.
+    if side == "buy" and hedge_usd_requested > 0:
+        fx_required = hedge_usd_requested * (1 + p["hedge_fee"])
+        available_fx = max(0.0, p["fx_limit"] - sim["fx_used_usd"])
+        allocated_fx = min(fx_required, available_fx)
+        hedged_ratio = allocated_fx / fx_required if fx_required > 0 else 1.0
+        sim["fx_used_usd"] += allocated_fx
+
+        if hedged_ratio < 1.0 - 1e-12:
+            fx_step_status = "block"
+            fx_note = "โควตาไม่พอ จึง Hedge ได้บางส่วนและเหลือ Unhedged Exposure"
+        else:
+            fx_note = "โควตาเพียงพอสำหรับ Buy-side Hedge"
+
+        fx_step = dict(
+            n=5, t="ด่าน FX Limit (Buy-side)",
+            s=fx_step_status,
+            note=fx_note,
+            rows=[
+                ("FX ที่ต้องใช้", f"$ {fx_required:,.0f}"),
+                ("FX ที่จัดสรร", f"$ {allocated_fx:,.0f}"),
+                ("Hedge Coverage", f"{hedged_ratio*100:.1f}%"),
+            ],
+            total=("FX คงเหลือ", f"$ {max(0.0, p['fx_limit']-sim['fx_used_usd']):,.0f}")
+        )
+    else:
+        fx_step = dict(
+            n=5, t="ด่าน FX Limit",
+            s="pass",
+            note="Sell-side ใช้ CEX liquidity เดิมตามสมมติฐานของ simulator",
+            total=("FX คงเหลือ", f"$ {max(0.0, p['fx_limit']-sim['fx_used_usd']):,.0f}")
+        )
+
+    hedge_executed_coins = hedge_requested * hedged_ratio
+    unhedged_coins = max(0.0, hedge_requested - hedge_executed_coins)
+    hedge_thb = hedge_executed_coins * global_thb
+    hedge_usd = hedge_executed_coins * spot
+    unhedged_thb = unhedged_coins * global_thb
+
+    if unhedged_thb > 0 and side == "buy":
+        sim["unhedged_thb"] += unhedged_thb
+
+    steps.append(dict(
+        n=4, t="ระบบตัดสินใจ Hedge อัตโนมัติ",
+        s="block" if unhedged_coins > 0 else "pass",
+        note=("ไม่มีส่วนที่ต้อง Hedge" if hedge_requested == 0 else
+              "Hedge ครบตาม Target" if unhedged_coins == 0 else
+              "Hedge ได้บางส่วนและมี Market Exposure เหลือ"),
+        rows=[
+            ("Hedge ที่ต้องการ", fmt_coin(hedge_requested, sim["asset"])),
+            ("Hedge ที่ทำได้", fmt_coin(hedge_executed_coins, sim["asset"])),
+            ("Unhedged", fmt_coin(unhedged_coins, sim["asset"])),
+        ],
+        total=("สถานะ", "Hedge ครบ" if unhedged_coins == 0 else "มี Unhedged Risk")
+    ))
     steps.append(fx_step)
 
-    spread_rev, premium_rev = coins * mid * p["spread"], coins * coin_price_global * p["local_premium"]
-    wd_markup_rev = (p["wd_fee_per_coin"] * coin_price_global + calc_thb_withdrawal_fee(amount_thb, p["bank_type"], p["ktb_wd_fee"])) * p["wd_markup"]
-    ktb_fx_benefit = hedge_thb * (p["ktb_fx_bps"] / 10000.0) if hedged else 0.0
-    hedge_fee_cost, slippage_cost = (hedge_thb * p["hedge_fee"] if hedged else 0.0), (hedge_thb * p["daily_vol"] * p["slip_sens"] if hedged else 0.0)
-    net = spread_rev + premium_rev + (trading_fee if p["include_fee_rev"] else 0.0) + wd_markup_rev + ktb_fx_benefit - hedge_fee_cost - slippage_cost
+    # Economics vs global mid. The basis term changes sign with direction.
+    spread_rev = coins * local_mid * p["spread"]
+    basis_pnl = (
+        coins * (local_mid - global_thb)
+        if side == "buy"
+        else coins * (global_thb - local_mid)
+    )
+
+    crypto_wd_markup = 0.0
+    if side == "buy":
+        network_cost = p["wd_fee_per_coin"] * global_thb
+        crypto_wd_markup = network_cost * p["wd_markup"]
+
+    ktb_fx_benefit = (
+        hedge_thb * (p["ktb_fx_bps"] / 10000.0)
+        if side == "buy" and hedge_executed_coins > 0 else 0.0
+    )
+    hedge_fee_cost = hedge_thb * p["hedge_fee"]
+    slippage_cost = hedge_thb * p["daily_vol"] * p["slip_sens"]
+
+    net = (
+        spread_rev
+        + basis_pnl
+        + (trading_fee if p["include_fee_rev"] else 0.0)
+        + crypto_wd_markup
+        + ktb_fx_benefit
+        - hedge_fee_cost
+        - slippage_cost
+    )
     sim["pnl_thb"] += net
 
-    stock_thb = max(0.0, sim["inv_coins"]) * coin_price_global
-    nc = nc_snapshot(stock_thb, p["capital"], p["cex_margin"], p["liab"], p["h_crypto"], p["h_cex"], p["fixed_min_nc"], p["trading_risk_rate"], p["daily_volume_thb"], p["custody_rate"])
-    
-    nc_status = "block" if nc["buffer"] < 0 else ("warn" if nc["buffer"] < 0.5 * nc["required"] or p["hot_breach"] else "pass")
-    steps.append(dict(n=6, t="ด่านตรวจสอบเงินกองทุน (ก.ล.ต.)", s=nc_status,
-                      note="ผ่านเกณฑ์เงินกองทุน" if nc_status == "pass" else "เงินกองทุนไม่เพียงพอหรือละเมิดเกณฑ์ Hot Wallet",
-                      rows=[("NC ที่มีจริง", fmt_baht(nc["actual"])), ("NC ที่ต้องดำรงขั้นต่ำ", fmt_baht(nc["required"]))],
-                      total=("ส่วนเกิน (Buffer)", fmt_baht(nc["buffer"], force_sign=True))))
+    stock_thb = max(0.0, sim["inv_coins"]) * global_thb
+    nc = nc_snapshot(
+        stock_thb, p["capital"], p["cex_margin"], p["liab"],
+        p["h_crypto"], p["h_cex"], p["fixed_min_nc"],
+        p["trading_risk_rate"], p["daily_volume_thb"], p["custody_rate"]
+    )
+    nc_status = "block" if nc["buffer"] < 0 else (
+        "warn" if nc["buffer"] < 0.5 * nc["required"] or p["hot_breach"] else "pass"
+    )
 
-    steps.append(dict(n=7, t="สรุปกำไร/ขาดทุน (P&L)", s="pass" if net >= 0 else "block",
-                      note="รายได้หักลบกับต้นทุน Hedge ของบริษัท",
-                      rows=[("Dealer Spread & Premium", "+ " + fmt_baht(spread_rev + premium_rev)),
-                            ("ค่าธรรมเนียมบนกระดานโลก", "− " + fmt_baht(hedge_fee_cost)),
-                            ("ค่าเสียโอกาส (Slippage)", "− " + fmt_baht(slippage_cost))],
-                      total=("กำไรสุทธิ", f"{fmt_baht(net, force_sign=True)} ({net/amount_thb*10000:,.1f} bps)")))
+    steps.append(dict(
+        n=6, t="ด่านตรวจสอบเงินกองทุน (Planning Model)",
+        s=nc_status,
+        note=("Buffer อยู่เหนือขั้นต่ำ" if nc_status == "pass"
+              else "Buffer ต่ำ/ติดลบ หรือมี Hot Wallet Breach"),
+        rows=[
+            ("NC ที่มีจริง", fmt_baht(nc["actual"])),
+            ("NC ที่ต้องดำรง", fmt_baht(nc["required"])),
+        ],
+        total=("NC Buffer", fmt_baht(nc["buffer"], force_sign=True))
+    ))
+
+    steps.append(dict(
+        n=7, t="สรุปกำไร/ขาดทุน (P&L)",
+        s="pass" if net >= 0 else "block",
+        note="Spread + Basis + Fee − Hedge Fee − Slippage",
+        rows=[
+            ("Dealer Spread", "+ " + fmt_baht(spread_rev)),
+            ("Premium / Basis P&L",
+             ("+ " if basis_pnl >= 0 else "− ") + fmt_baht(abs(basis_pnl))),
+            ("Trading Fee Revenue", "+ " + fmt_baht(trading_fee if p["include_fee_rev"] else 0.0)),
+            ("Hedge Fee", "− " + fmt_baht(hedge_fee_cost)),
+            ("Slippage", "− " + fmt_baht(slippage_cost)),
+        ],
+        total=("กำไรสุทธิ",
+               f"{fmt_baht(net, force_sign=True)} ({net/amount_thb*10000:,.1f} bps)")
+    ))
+
+    # Final gate must reflect both FX/unhedged and NC failures.
+    if nc_status == "block":
+        gate = "NC ไม่ผ่าน"
+    elif unhedged_coins > 0:
+        gate = "FX Limit / Unhedged"
+    else:
+        gate = "ผ่าน"
 
     sim["orders"].append({
-        "ฝั่ง": "ซื้อ" if side == "buy" else "ขาย", "เหรียญ": sim["asset"], "มูลค่า (บาท)": amount_thb, "ราคาที่ลูกค้าได้": quote,
-        "เหรียญที่ส่งมอบ": coins, "Hedge (USD)": hedge_usd if hedged else 0.0, "รายได้": net + hedge_fee_cost + slippage_cost,
-        "ต้นทุน": hedge_fee_cost + slippage_cost, "กำไรออเดอร์": net, "สต็อกคงเหลือ": sim["inv_coins"],
-        "FX ใช้สะสม (USD)": sim["fx_used_usd"], "NC Buffer": nc["buffer"], "ผลด่าน": gate,
+        "ฝั่ง": "ซื้อ" if side == "buy" else "ขาย",
+        "เหรียญ": sim["asset"],
+        "มูลค่า (บาท)": amount_thb,
+        "ราคาที่ลูกค้าได้": quote,
+        "เหรียญที่ส่งมอบ": coins,
+        "Trading Fee": trading_fee,
+        "Basis P&L": basis_pnl,
+        "Hedge (USD)": hedge_usd,
+        "Unhedged (THB)": unhedged_thb,
+        "รายได้": net + hedge_fee_cost + slippage_cost,
+        "ต้นทุน": hedge_fee_cost + slippage_cost,
+        "กำไรออเดอร์": net,
+        "สต็อกคงเหลือ": sim["inv_coins"],
+        "FX ใช้สะสม (USD)": sim["fx_used_usd"],
+        "NC Buffer": nc["buffer"],
+        "ผลด่าน": gate,
     })
     return steps, None
-
 with tab3:
     st.markdown("""
 ### 🛒 Customer Order Journey
@@ -872,6 +1182,11 @@ with tab3:
             a_factor_sim = safety_stock_factor(net_bias_pct, flow_cv_pct, settlement_days, z_alpha)
             target_stock_thb = a_factor_sim * monthly_volume_thb
 
+            st.caption(
+                "สมมติฐานของ simulator: Buy-side hedge ใช้ outbound FX quota; Sell-side hedge ใช้ CEX liquidity เดิม. "
+                "NC/Capital เป็น planning model ไม่ใช่ตัวรับรอง compliance อัตโนมัติ"
+            )
+
             ctx = dict(spot_usd=spot_usd_now, usdthb=usdthb_now_sim, local_premium=local_premium, spread=dealer_spread, hedge_fee=hedge_fee,
                        fx_limit=fx_limit_max, daily_vol=daily_vol_now, slip_sens=slippage_sensitivity, include_fee_rev=include_trading_fee_revenue, 
                        wd_markup=withdrawal_fee_markup_pct, wd_fee_per_coin=WITHDRAWAL_FEE_TABLE.get(asset, 0.0), bank_type=bank_type,
@@ -879,10 +1194,15 @@ with tab3:
                        cex_margin=cex_margin_thb, liab=liab_thb, h_crypto=h_crypto_sim, h_cex=h_cex_sim, fixed_min_nc=fixed_min_nc,
                        trading_risk_rate=trading_risk_rate, daily_volume_thb=daily_volume_thb, custody_rate=custody_rate_blended, hot_breach=hot_wallet_cap_breach)
 
-            need_reset = ("sim" not in st.session_state or st.session_state.sim["asset"] != asset or st.session_state.get("sim_target_key") != round(target_stock_thb, 2))
+            sim_signature = _sim_config_signature(ctx, target_stock_thb)
+            need_reset = (
+                "sim" not in st.session_state
+                or st.session_state.get("sim_signature") != sim_signature
+                or st.session_state.sim.get("asset") != asset
+            )
             if need_reset:
                 st.session_state.sim = _sim_defaults(asset, spot_usd_now, usdthb_now_sim, target_stock_thb)
-                st.session_state.sim_target_key = round(target_stock_thb, 2)
+                st.session_state.sim_signature = sim_signature
                 st.session_state.sim_steps = []
             sim = st.session_state.sim
             sim["target_thb"] = target_stock_thb
@@ -968,6 +1288,7 @@ with tab3:
 
                 if reset:
                     st.session_state.sim = _sim_defaults(asset, spot_usd_now, usdthb_now_sim, target_stock_thb)
+                    st.session_state.sim_signature = _sim_config_signature(ctx, target_stock_thb)
                     st.session_state.sim_steps = []
                     st.rerun()
 
@@ -1043,6 +1364,9 @@ with tab3:
                                  "Hedge (USD)": st.column_config.NumberColumn(format="%.0f"),
                                  "รายได้": st.column_config.NumberColumn(format="%.0f"),
                                  "ต้นทุน": st.column_config.NumberColumn(format="%.0f"),
+                                 "Trading Fee": st.column_config.NumberColumn(format="%.0f"),
+                                 "Basis P&L": st.column_config.NumberColumn(format="%.0f"),
+                                 "Unhedged (THB)": st.column_config.NumberColumn(format="%.0f"),
                                  "กำไรออเดอร์": st.column_config.NumberColumn(format="%.0f"),
                                  "สต็อกคงเหลือ": st.column_config.NumberColumn(format="%.6f"),
                                  "FX ใช้สะสม (USD)": st.column_config.NumberColumn(format="%.0f"),
