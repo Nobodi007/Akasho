@@ -346,7 +346,10 @@ with st.sidebar:
         st.error("❌ วันเริ่มต้นต้องอยู่ก่อนวันสิ้นสุด")
 
     with st.expander("💰 พารามิเตอร์ Dealer", expanded=True):
-        trade_vol = st.number_input("ปริมาณซื้อขายลูกค้า/วัน (USD eq.)", value=100000, step=10000, key="bt_trade_vol")
+        trade_vol_k = st.number_input("ปริมาณซื้อขายลูกค้า/วัน (พัน USD)", value=100.0, step=10.0,
+                                       min_value=0.0, key="bt_trade_vol",
+                                       help="กรอกหน่วยเป็นพันดอลลาร์ เช่น 100 = 100,000 USD")
+        trade_vol = trade_vol_k * 1_000
         dealer_spread = st.number_input("Dealer Spread ที่เก็บจากลูกค้า (%)", value=0.5, step=0.1, key="bt_spread") / 100
 
         if "bt_prev_gx" not in st.session_state:
@@ -358,8 +361,10 @@ with st.sidebar:
             st.session_state.bt_prev_gx = global_exchange
 
         hedge_fee = st.number_input("ค่าธรรมเนียม Global CEX (%)", key="bt_hedge_fee", step=0.01) / 100
-        fx_limit_max = st.number_input("FX Limit ต่อเดือน (USD)", value=5000000, step=500000,
-                                       min_value=1, key="bt_fx_limit")
+        fx_limit_mm = st.number_input("FX Limit ต่อเดือน (ล้าน USD)", value=5.0, step=0.5,
+                                       min_value=0.01, key="bt_fx_limit",
+                                       help="กรอกหน่วยเป็นล้านดอลลาร์ เช่น 5 = 5,000,000 USD")
+        fx_limit_max = fx_limit_mm * 1_000_000
         local_premium = st.number_input(
             "Local Premium/Discount ฝั่งไทย (%)", value=0.1, step=0.1, key="bt_local_premium",
             help="ส่วนต่างราคากระดานไทยเทียบราคาโลก ค่าเริ่มต้น 0.1% สะท้อนพรีเมียมที่มักพบช่วงตลาดปกติ") / 100
@@ -744,9 +749,11 @@ with tab2:
             section("📥 พารามิเตอร์ธุรกรรม (Flow Assumptions)")
             fc1, fc2 = st.columns(2)
             with fc1:
-                monthly_volume_thb = st.number_input("ปริมาณธุรกรรมลูกค้าต่อเดือน (THB)",
-                                                      value=300_000_000, step=10_000_000, min_value=0,
-                                                      key="cp_volume")
+                monthly_volume_mb = st.number_input("ปริมาณธุรกรรมลูกค้าต่อเดือน (ล้านบาท)",
+                                                      value=300.0, step=10.0, min_value=0.0,
+                                                      key="cp_volume",
+                                                      help="กรอกหน่วยเป็นล้านบาท เช่น 300 = 300,000,000 บาท")
+                monthly_volume_thb = monthly_volume_mb * 1_000_000
                 net_bias_pct = st.slider("Net Flow Bias — ลูกค้าซื้อสุทธิ(+) / ขายสุทธิ(-)",
                                           -100, 100, 20, key="cp_bias",
                                           help="ทิศทางสุทธิที่ทำให้ต้องดองคริปโตไว้เป็นสต็อก (ฝั่ง + เท่านั้นที่กินสต็อก)") / 100
@@ -779,16 +786,21 @@ with tab2:
             section("💼 เงินทุนที่มี (Capital Pool)")
             bc1, bc2, bc3 = st.columns(3)
             with bc1:
-                total_capital_thb = st.number_input(
-                    "เงินทุนสภาพคล่องรวม (THB)", value=150_000_000, step=5_000_000, min_value=0,
+                total_capital_mb = st.number_input(
+                    "เงินทุนสภาพคล่องรวม (ล้านบาท)", value=150.0, step=5.0, min_value=0.0,
                     key="cp_total_capital",
-                    help="เงินสดทั้งหมดก่อนจัดสรรไปเป็นสต็อกเหรียญ (ระบบจะคำนวณให้ว่าควรแบ่งเป็นเงินสด/สต็อกเท่าไหร่)")
+                    help="กรอกหน่วยเป็นล้านบาท เช่น 150 = 150,000,000 บาท — เงินสดทั้งหมดก่อนจัดสรรไปเป็นสต็อกเหรียญ")
+                total_capital_thb = total_capital_mb * 1_000_000
             with bc2:
-                cex_margin_thb = st.number_input("เงินทุนบนกระดานโลก / CEX Margin (THB)",
-                                                 value=40_000_000, step=1_000_000, min_value=0, key="cp_cex_margin")
+                cex_margin_mb = st.number_input("เงินทุนบนกระดานโลก / CEX Margin (ล้านบาท)",
+                                                 value=40.0, step=1.0, min_value=0.0, key="cp_cex_margin",
+                                                 help="กรอกหน่วยเป็นล้านบาท เช่น 40 = 40,000,000 บาท")
+                cex_margin_thb = cex_margin_mb * 1_000_000
             with bc3:
-                liab_thb = st.number_input("หนี้สินต่อลูกค้า (THB)", value=200_000_000, step=5_000_000,
-                                           min_value=1, key="cp_liab")
+                liab_mb = st.number_input("หนี้สินต่อลูกค้า (ล้านบาท)", value=200.0, step=5.0,
+                                           min_value=0.01, key="cp_liab",
+                                           help="กรอกหน่วยเป็นล้านบาท เช่น 200 = 200,000,000 บาท")
+                liab_thb = liab_mb * 1_000_000
 
             # ---------- CORE CALC ----------
             h_crypto = float(min(rp["es99"] * np.sqrt(settlement_days), 0.95))
