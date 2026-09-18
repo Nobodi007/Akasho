@@ -49,12 +49,29 @@ st.markdown("""
         border-left:3px solid #00D26A; padding-left:10px; margin:1.2rem 0 .6rem 0;
     }
     iframe { border-radius: 12px; }
-    /* --- Order trace (Tab 3) --- */
-    .xs-step { border:1px solid #1f2937; border-radius:10px; padding:12px 16px; margin-bottom:10px;
-               background:#0f1621; }
-    .xs-step.pass  { border-left:3px solid #00D26A; }
-    .xs-step.warn  { border-left:3px solid #F59E0B; }
-    .xs-step.block { border-left:3px solid #FF4B4B; }
+    
+    /* --- Gauge bars (หลอดพลัง) --- */
+    .xs-gauge { margin:0 0 .35rem 0; }
+    .xs-gauge .top { display:flex; justify-content:space-between; font-size:.8rem; color:#9CA3AF; margin-bottom:5px; }
+    .xs-gauge .top b { color:#FAFAFA; font-variant-numeric:tabular-nums; }
+    .xs-gauge .track { height:10px; background:#1f2937; border-radius:999px; overflow:hidden; }
+    .xs-gauge .fill { height:100%; border-radius:999px; transition:width .4s ease; }
+    .xs-gauge .sub { font-size:.74rem; color:#6B7280; margin-top:4px; }
+    
+    /* --- Timeline (เส้นเชื่อมด่านตรวจสอบ) --- */
+    .xs-tl { position:relative; padding-left:34px; }
+    .xs-tl::before { content:""; position:absolute; left:11px; top:14px; bottom:14px; width:2px;
+                     background:linear-gradient(180deg,#00D26A 0%,#374151 100%); }
+    .xs-tl .xs-step { position:relative; --c:#00D26A; border:1px solid #1f2937; border-radius:10px; padding:12px 16px; margin-bottom:10px; background:#0f1621; }
+    .xs-tl .xs-step.warn  { --c:#F59E0B; }
+    .xs-tl .xs-step.block { --c:#FF4B4B; }
+    .xs-tl .xs-step::before {
+        content:attr(data-n); position:absolute; left:-34px; top:11px; width:24px; height:24px;
+        border-radius:50%; background:#0f1621; border:2px solid var(--c); color:#FAFAFA;
+        font-size:.72rem; font-weight:700; display:flex; align-items:center; justify-content:center;
+        box-shadow:0 0 0 4px #0E1117;
+    }
+    
     .xs-step h4 { margin:0 0 2px 0; font-size:.95rem; color:#FAFAFA; font-weight:700;
                   display:flex; justify-content:space-between; gap:12px; align-items:baseline; }
     .xs-step .xs-tag { font-size:.7rem; font-weight:700; padding:2px 10px; border-radius:999px; white-space:nowrap; }
@@ -130,17 +147,14 @@ def fmt_num(value, force_sign=False):
     else:                    num = f"{v:,.2f}"
     return f"{sign}{num}"
 
-
 def fmt_baht(value, force_sign=False):
     return f"฿ {fmt_num(value, force_sign)}"
-
 
 def fmt_coin(value, symbol=""):
     """จำนวนเหรียญ: เหรียญราคาแพงต้องการทศนิยมเยอะกว่าเหรียญราคาถูก"""
     v = abs(float(value))
     d = 6 if v < 1 else (4 if v < 1000 else 2)
     return f"{value:,.{d}f}" + (f" {symbol}" if symbol else "")
-
 
 def _reformat_comma_key(key):
     """Callback: เมื่อผู้ใช้พิมพ์เสร็จ ให้จัดรูปเลขในช่องใหม่ให้มี comma คั่นหลักพัน"""
@@ -151,7 +165,6 @@ def _reformat_comma_key(key):
         st.session_state[key] = f"{num:,.0f}" if num == int(num) else f"{num:,.2f}"
     except ValueError:
         pass  # พิมพ์ไม่ครบ/ไม่ใช่ตัวเลข ปล่อยไว้เฉย ๆ จนกว่าจะแก้ให้ถูก
-
 
 def comma_number_input(label, value, min_value=None, key=None, help=None):
     """ช่องกรอกตัวเลขที่โชว์ comma คั่นหลักพันในช่องเลย (เช่น 150,000,000) แทน number_input ธรรมดา"""
@@ -167,7 +180,6 @@ def comma_number_input(label, value, min_value=None, key=None, help=None):
         num = float(min_value)
     return num
 
-
 def colored_metric(label, display_value, raw_value=None, sub_text=None, font_size="1.5rem"):
     color = "#FAFAFA" if raw_value is None else ("#00D26A" if raw_value >= 0 else "#FF4B4B")
     sub = f'<div style="font-size:.78rem;color:{color};opacity:.85;margin-top:3px;">{sub_text}</div>' if sub_text else ""
@@ -179,16 +191,13 @@ def colored_metric(label, display_value, raw_value=None, sub_text=None, font_siz
       {sub}
     </div>""", unsafe_allow_html=True)
 
-
 def metric_card(col, label, value, raw_value=None, sub_text=None, font_size="1.5rem"):
     with col:
         with st.container(border=True):
             colored_metric(label, value, raw_value, sub_text, font_size)
 
-
 def section(title):
     st.markdown(f'<div class="xs-sec">{title}</div>', unsafe_allow_html=True)
-
 
 def calc_thb_withdrawal_fee(amount_thb: float, bank_type: str, ktb_fee_thb: float = 15.0) -> float:
     if bank_type == "KTB (กรุงไทย)":
@@ -196,7 +205,6 @@ def calc_thb_withdrawal_fee(amount_thb: float, bank_type: str, ktb_fee_thb: floa
     if bank_type == "SCB":
         return 20.0
     return 20.0 if amount_thb <= 2_000_000 else 70.0
-
 
 def verdict_box(ok: bool, title: str, detail: str, warn: bool = False):
     """กล่องสรุปผล ✅/⚠️/🚨 ใช้ทั่วทั้งแอปสำหรับสื่อสารผลเชิงเกณฑ์"""
@@ -213,22 +221,42 @@ def verdict_box(ok: bool, title: str, detail: str, warn: bool = False):
         f"<div style='color:#D1D5DB;font-size:.84rem;margin-top:4px;'>{detail}</div></div>",
         unsafe_allow_html=True)
 
+def gauge_bar(label, used, limit, value_text="", sub="", warn_at=0.70, crit_at=0.90):
+    """หลอดแสดงความจุที่ใช้ไป: เขียว < warn_at <= ส้ม < crit_at <= แดง"""
+    if limit is None or limit <= 0:
+        pct = 1.5 if used > 0 else 0.0
+    else:
+        pct = max(0.0, used / limit)
+    color = "#00D26A" if pct < warn_at else ("#F59E0B" if pct < crit_at else "#FF4B4B")
+    width = min(pct, 1.0) * 100
+    st.markdown(
+        f"<div class='xs-gauge'>"
+        f"<div class='top'><span>{label}</span><b style='color:{color}'>{value_text or f'{pct*100:.0f}%'}</b></div>"
+        f"<div class='track'><div class='fill' style='width:{width:.1f}%;background:{color};'></div></div>"
+        + (f"<div class='sub'>{sub}</div>" if sub else "")
+        + "</div>", unsafe_allow_html=True)
 
-def step_card(number, title, status, note="", rows=None, total=None):
-    """การ์ดหนึ่งด่านในเส้นทางคำสั่งซื้อ (Tab 3) — status: pass / warn / block"""
+def step_html(number, title, status, note="", rows=None, total=None) -> str:
     tag = {"pass": "ผ่าน", "warn": "เฝ้าระวัง", "block": "ติดด่าน"}[status]
     body = ""
     if rows:
         body += "".join(f"<div class='xs-row'><span>{k}</span><b>{v}</b></div>" for k, v in rows)
     if total:
         body += f"<div class='xs-row xs-tot'><span>{total[0]}</span><b>{total[1]}</b></div>"
-    st.markdown(
-        f"<div class='xs-step {status}'>"
-        f"<h4><span>{number}. {title}</span><span class='xs-tag'>{tag}</span></h4>"
-        + (f"<p>{note}</p>" if note else "")
-        + (f"<div style='margin-top:8px'>{body}</div>" if body else "")
-        + "</div>", unsafe_allow_html=True)
+    return (f"<div class='xs-step {status}' data-n='{number}'>"
+            f"<h4><span>{title}</span><span class='xs-tag'>{tag}</span></h4>"
+            + (f"<p>{note}</p>" if note else "")
+            + (f"<div style='margin-top:8px'>{body}</div>" if body else "")
+            + "</div>")
 
+def step_card(number, title, status, note="", rows=None, total=None):
+    st.markdown(step_html(number, title, status, note, rows, total), unsafe_allow_html=True)
+
+def render_timeline(steps):
+    """วาดทุกด่านใน div เดียว เพื่อให้เส้น timeline ต่อกันเป็นเส้นเดียว"""
+    html = "".join(step_html(s["n"], s["t"], s["s"], s.get("note", ""), s.get("rows"), s.get("total"))
+                   for s in sorted(steps, key=lambda x: x["n"]))
+    st.markdown(f"<div class='xs-tl'>{html}</div>", unsafe_allow_html=True)
 
 # --- FIX #2: รอจนกล่องมีความสูงจริงก่อนวาด (แท็บที่ซ่อนอยู่ = height 0 -> กราฟค้างเปล่า) ---
 def render_tradingview(symbol: str, container_id: str, height: int = 500,
@@ -1125,12 +1153,6 @@ CV = {flow_cv_pct*100:.0f}%, net_bias = {net_bias_pct*100:+.0f}%, h_crypto = {h_
 # ---------------------------------------------------------
 # TAB 3 — CUSTOMER ORDER SIMULATOR
 # ---------------------------------------------------------
-# CUSTOMER-SIDE ONLY PATCH
-# หมายเหตุ: ไม่แตะ logic / UI / สูตรของ Tab 1 และ Tab 2
-# สมมติฐาน:
-#   - Buy-side hedge ใช้ outbound FX quota
-#   - Sell-side hedge ใช้ CEX liquidity เดิม
-#   - NC/Capital เป็น planning model ไม่ใช่ตัวรับรอง compliance อัตโนมัติ
 
 def _sim_defaults(asset_name, spot_usd, usdthb, target_stock_thb):
     coin_price = spot_usd * usdthb
@@ -1145,9 +1167,7 @@ def _sim_defaults(asset_name, spot_usd, usdthb, target_stock_thb):
         "orders": [],
     }
 
-
 def _sim_config_signature(ctx, target_stock_thb):
-    """สร้าง signature แบบ robust สำหรับ reset simulator เมื่อ assumption สำคัญเปลี่ยน"""
     keys = [
         "asset", "spot_usd", "usdthb", "local_premium", "spread", "hedge_fee",
         "fx_limit", "daily_vol", "slip_sens", "include_fee_rev",
@@ -1165,9 +1185,7 @@ def _sim_config_signature(ctx, target_stock_thb):
     values.append(round(float(target_stock_thb), 2))
     return tuple(values)
 
-
 def _sim_normalize_state(sim, asset, spot_usd, usdthb, target_stock_thb):
-    """รองรับ session_state จากเวอร์ชันเก่าของ simulator โดยไม่ทำให้หน้า Customer พัง"""
     if not isinstance(sim, dict):
         return _sim_defaults(asset, spot_usd, usdthb, target_stock_thb)
 
@@ -1179,7 +1197,6 @@ def _sim_normalize_state(sim, asset, spot_usd, usdthb, target_stock_thb):
     sim.setdefault("unhedged_thb", 0.0)
     sim.setdefault("orders", [])
 
-    # ป้องกัน NaN/negative state จาก session เก่า
     for key in ("fx_used_usd", "cex_used_thb", "pnl_thb", "unhedged_thb"):
         try:
             sim[key] = float(sim[key])
@@ -1200,16 +1217,7 @@ def _sim_normalize_state(sim, asset, spot_usd, usdthb, target_stock_thb):
     sim["target_thb"] = float(target_stock_thb)
     return sim
 
-
 def execute_order(sim, side, amount_thb, ctx):
-    """
-    จำลองคำสั่งลูกค้าทีละออเดอร์
-    - Buy: จ่ายเหรียญให้ลูกค้า -> เติม inventory กลับด้วย outbound FX quota
-    - Sell: รับเหรียญจากลูกค้า -> ขายส่วนเกินบน CEX liquidity
-    - ไม่ยอมให้ inventory ติดลบ
-    - FX hedge ทำ partial ได้
-    - Sell-side hedge ไม่ใช้ outbound FX quota
-    """
     p = ctx
     side = "buy" if side == "buy" else "sell"
 
@@ -1238,9 +1246,7 @@ def execute_order(sim, side, amount_thb, ctx):
 
     # 1) Quote
     steps.append(dict(
-        n=1,
-        t="ตั้งราคาให้ลูกค้า",
-        s="pass",
+        n=1, t="ตั้งราคาให้ลูกค้า", s="pass",
         note="ราคาลูกค้าถูกประกอบจาก Global Reference + Local Premium + Dealer Spread",
         rows=[
             ("ราคาโลก (USD)", f"$ {spot:,.2f}"),
@@ -1257,8 +1263,7 @@ def execute_order(sim, side, amount_thb, ctx):
     coins = settlement_thb / quote
 
     if coins <= 0:
-        steps.append(dict(n=2, t="จับคู่และส่งมอบ", s="block",
-                          note="จำนวนเหรียญที่คำนวณได้ไม่เป็นบวก"))
+        steps.append(dict(n=2, t="จับคู่และส่งมอบ", s="block", note="จำนวนเหรียญที่คำนวณได้ไม่เป็นบวก"))
         return steps, None
 
     inv_before = float(sim["inv_coins"])
@@ -1267,7 +1272,6 @@ def execute_order(sim, side, amount_thb, ctx):
 
     # ---------- Pre-check Buy: ต้องไม่ส่งมอบของที่ไม่มี ----------
     if side == "buy":
-        # Hedge ที่ต้องใช้เพื่อ restore target รวมถึง stock shortfall ที่เกิดจากออเดอร์นี้ด้วย
         required_topup_coins = max(0.0, target_coins - inv_after_customer)
         fx_left_usd = max(0.0, float(p["fx_limit"]) - float(sim["fx_used_usd"]))
         max_hedge_by_fx = (
@@ -1276,12 +1280,9 @@ def execute_order(sim, side, amount_thb, ctx):
         )
         feasible_hedge_coins = min(required_topup_coins, max_hedge_by_fx)
 
-        # ถ้าหลัง hedge แล้วยังต้องติดลบ = ลูกค้าส่งมอบไม่ได้ -> block ทั้ง order
         if inv_after_customer + feasible_hedge_coins < -1e-12:
             steps.append(dict(
-                n=2,
-                t="จับคู่และส่งมอบเข้ากระเป๋า",
-                s="block",
+                n=2, t="จับคู่และส่งมอบเข้ากระเป๋า", s="block",
                 note="สต็อกที่มีอยู่ + ความสามารถ hedge ที่เหลือไม่เพียงพอ จึงไม่ส่งมอบเหรียญที่ไม่มีอยู่จริง",
                 rows=[
                     ("มูลค่าคำสั่ง", fmt_baht(amount_thb)),
@@ -1294,40 +1295,23 @@ def execute_order(sim, side, amount_thb, ctx):
                 total=("สถานะ", "Reject — Inventory/FX ไม่พอ"),
             ))
             return steps, {
-                "ฝั่ง": "ซื้อ",
-                "เหรียญ": sim["asset"],
-                "มูลค่า (บาท)": amount_thb,
-                "ราคาที่ลูกค้าได้": quote,
-                "เหรียญที่ส่งมอบ": 0.0,
-                "Hedge (USD)": 0.0,
-                "รายได้": 0.0,
-                "ต้นทุน": 0.0,
-                "กำไรออเดอร์": 0.0,
-                "สต็อกคงเหลือ": inv_before,
-                "FX ใช้สะสม (USD)": sim["fx_used_usd"],
-                "CEX Liquidity ใช้สะสม (THB)": sim["cex_used_thb"],
-                "NC Buffer": np.nan,
+                "ฝั่ง": "ซื้อ", "เหรียญ": sim["asset"], "มูลค่า (บาท)": amount_thb, "ราคาที่ลูกค้าได้": quote,
+                "เหรียญที่ส่งมอบ": 0.0, "Hedge (เหรียญ)": 0.0, "Hedge (USD)": 0.0, "CEX Liquidity ใช้ (บาท)": 0.0,
+                "Unhedged (บาท)": 0.0, "Market Edge": 0.0, "รายได้": 0.0, "ต้นทุน": 0.0, "กำไรออเดอร์": 0.0,
+                "สต็อกคงเหลือ": inv_before, "FX ใช้สะสม (USD)": sim["fx_used_usd"],
+                "CEX Liquidity ใช้สะสม (บาท)": sim["cex_used_thb"], "NC Buffer": np.nan,
                 "ผลด่าน": "Reject — Inventory/FX ไม่พอ",
             }
 
     steps.append(dict(
-        n=2,
-        t="จับคู่และส่งมอบเข้ากระเป๋า",
-        s="pass",
-        note=(
-            "ลูกค้าชำระเงินบาทและได้รับเหรียญจาก inventory"
-            if side == "buy"
-            else "รับเหรียญจากลูกค้าและจ่ายเงินบาทตามราคาที่ quote"
-        ),
+        n=2, t="จับคู่และส่งมอบเข้ากระเป๋า", s="pass",
+        note=("ลูกค้าชำระเงินบาทและได้รับเหรียญจาก inventory" if side == "buy" else "รับเหรียญจากลูกค้าและจ่ายเงินบาทตามราคาที่ quote"),
         rows=[
             ("มูลค่าที่ลูกค้าใส่", fmt_baht(amount_thb)),
             (f"ค่าธรรมเนียมซื้อขาย {LOCAL_TRADING_FEE_PCT*100:.2f}%", "− " + fmt_baht(trading_fee)),
             ("ฐาน settlement หลังค่าธรรมเนียม", fmt_baht(settlement_thb)),
         ],
-        total=(
-            "เหรียญที่ลูกค้าได้" if side == "buy" else "เหรียญที่ลูกค้าส่งมอบ",
-            fmt_coin(coins, sim["asset"]),
-        ),
+        total=("เหรียญที่ลูกค้าได้" if side == "buy" else "เหรียญที่ลูกค้าส่งมอบ", fmt_coin(coins, sim["asset"])),
     ))
 
     # 3) Inventory movement
@@ -1336,14 +1320,8 @@ def execute_order(sim, side, amount_thb, ctx):
     excess_coins = max(0.0, sim["inv_coins"] - target_coins)
 
     steps.append(dict(
-        n=3,
-        t="ตัด/รับสต็อก",
-        s="warn" if (short_coins > 0 or excess_coins > 0) else "pass",
-        note=(
-            "Buy ลด inventory ก่อน แล้วค่อยเติมกลับด้วย hedge"
-            if side == "buy"
-            else "Sell เพิ่ม inventory ก่อน แล้วค่อยขายส่วนเกินบน CEX"
-        ),
+        n=3, t="ตัด/รับสต็อก", s="warn" if (short_coins > 0 or excess_coins > 0) else "pass",
+        note=("Buy ลด inventory ก่อน แล้วค่อยเติมกลับด้วย hedge" if side == "buy" else "Sell เพิ่ม inventory ก่อน แล้วค่อยขายส่วนเกินบน CEX"),
         rows=[
             ("สต็อกก่อนออเดอร์", fmt_coin(inv_before, sim["asset"])),
             ("การเปลี่ยนแปลง", ("− " if side == "buy" else "+ ") + fmt_coin(coins, sim["asset"])),
@@ -1362,10 +1340,7 @@ def execute_order(sim, side, amount_thb, ctx):
 
     if side == "buy":
         fx_left_usd = max(0.0, float(p["fx_limit"]) - float(sim["fx_used_usd"]))
-        max_hedge_by_fx = (
-            fx_left_usd / (spot * (1 + p["hedge_fee"]))
-            if spot > 0 and p["hedge_fee"] >= 0 else 0.0
-        )
+        max_hedge_by_fx = (fx_left_usd / (spot * (1 + p["hedge_fee"])) if spot > 0 and p["hedge_fee"] >= 0 else 0.0)
         hedged_coins = min(hedge_required_coins, max_hedge_by_fx)
         residual_unhedged_coins = max(0.0, hedge_required_coins - hedged_coins)
         hedge_usd = hedged_coins * spot * (1 + p["hedge_fee"])
@@ -1377,16 +1352,10 @@ def execute_order(sim, side, amount_thb, ctx):
 
         fx_status = "pass" if residual_unhedged_coins <= 1e-12 else "warn"
         hedge_status = "pass" if residual_unhedged_coins <= 1e-12 else "warn"
-        hedge_note = (
-            "เติม inventory กลับถึง target ด้วยการซื้อบน Global CEX"
-            if residual_unhedged_coins <= 1e-12
-            else "FX quota ไม่พอสำหรับเติม inventory ทั้งหมด จึงเหลือ exposure ค้างบางส่วน"
-        )
+        hedge_note = ("เติม inventory กลับถึง target ด้วยการซื้อบน Global CEX" if residual_unhedged_coins <= 1e-12 else "FX quota ไม่พอสำหรับเติม inventory ทั้งหมด จึงเหลือ exposure ค้างบางส่วน")
         cex_used_thb_this_order = 0.0
         cex_liquidity_left = max(0.0, float(p["cex_liquidity_thb"]) - float(sim["cex_used_thb"]))
-
     else:
-        # Sell-side ใช้ CEX liquidity เดิม ไม่กิน outbound FX
         cex_liquidity_left = max(0.0, float(p["cex_liquidity_thb"]) - float(sim["cex_used_thb"]))
         max_hedge_by_cex = cex_liquidity_left / coin_price_global if coin_price_global > 0 else 0.0
         hedged_coins = min(hedge_required_coins, max_hedge_by_cex)
@@ -1398,21 +1367,13 @@ def execute_order(sim, side, amount_thb, ctx):
 
         fx_status = "pass"
         hedge_status = "pass" if residual_unhedged_coins <= 1e-12 else "warn"
-        hedge_note = (
-            "ขาย inventory ส่วนเกินบน Global CEX โดยใช้ CEX liquidity"
-            if residual_unhedged_coins <= 1e-12
-            else "CEX liquidity ไม่พอขาย inventory ส่วนเกินทั้งหมด จึงเหลือ long exposure ค้าง"
-        )
-
+        hedge_note = ("ขาย inventory ส่วนเกินบน Global CEX โดยใช้ CEX liquidity" if residual_unhedged_coins <= 1e-12 else "CEX liquidity ไม่พอขาย inventory ส่วนเกินทั้งหมด จึงเหลือ long exposure ค้าง")
         fx_left_usd = max(0.0, float(p["fx_limit"]) - float(sim["fx_used_usd"]))
 
     hedge_thb = hedged_coins * coin_price_global
     hedge_usd = hedged_coins * spot * (1 + p["hedge_fee"])
     steps.append(dict(
-        n=4,
-        t="ระบบตัดสินใจ Hedge อัตโนมัติ",
-        s=hedge_status,
-        note=hedge_note,
+        n=4, t="ระบบตัดสินใจ Hedge อัตโนมัติ", s=hedge_status, note=hedge_note,
         rows=[
             ("ปริมาณที่ต้อง hedge", fmt_coin(hedge_required_coins, sim["asset"])),
             ("Hedge สำเร็จ", fmt_coin(hedged_coins, sim["asset"])),
@@ -1420,23 +1381,14 @@ def execute_order(sim, side, amount_thb, ctx):
             ("Residual Unhedged", fmt_coin(residual_unhedged_coins, sim["asset"])),
             ("Direction", "Buy บน CEX" if side == "buy" else "Sell บน CEX"),
         ],
-        total=(
-            "สถานะ",
-            "Hedge ครบ" if residual_unhedged_coins <= 1e-12 else "Hedge บางส่วน",
-        ),
+        total=("สถานะ", "Hedge ครบ" if residual_unhedged_coins <= 1e-12 else "Hedge บางส่วน"),
     ))
 
     # 5) FX / CEX liquidity gate
     if side == "buy":
         steps.append(dict(
-            n=5,
-            t="ด่าน FX Limit — Outbound",
-            s=fx_status,
-            note=(
-                "Buy-side hedge ใช้ outbound FX quota"
-                if residual_unhedged_coins <= 1e-12
-                else "โควตา outbound เหลือไม่พอ จึงเหลือ inventory exposure ที่ยังไม่ได้ hedge"
-            ),
+            n=5, t="ด่าน FX Limit — Outbound", s=fx_status,
+            note=("Buy-side hedge ใช้ outbound FX quota" if residual_unhedged_coins <= 1e-12 else "โควตา outbound เหลือไม่พอ จึงเหลือ inventory exposure ที่ยังไม่ได้ hedge"),
             rows=[
                 ("FX ใช้ก่อนออเดอร์", f"$ {sim['fx_used_usd'] - hedge_usd:,.0f}"),
                 ("ออเดอร์นี้ใช้", f"$ {hedge_usd:,.0f}"),
@@ -1448,9 +1400,7 @@ def execute_order(sim, side, amount_thb, ctx):
         ))
     else:
         steps.append(dict(
-            n=5,
-            t="ด่าน CEX Liquidity — Sell-side",
-            s=fx_status if residual_unhedged_coins <= 1e-12 else "warn",
+            n=5, t="ด่าน CEX Liquidity — Sell-side", s=fx_status if residual_unhedged_coins <= 1e-12 else "warn",
             note="Sell-side hedge ใช้ CEX liquidity เดิม ไม่กิน outbound FX quota",
             rows=[
                 ("CEX Liquidity ก่อนออเดอร์", fmt_baht(cex_liquidity_left + cex_used_thb_this_order)),
@@ -1462,7 +1412,7 @@ def execute_order(sim, side, amount_thb, ctx):
             total=("ส่วนที่ยัง Unhedged", fmt_baht(residual_unhedged_coins * coin_price_global)),
         ))
 
-    # 6) NC gate — ใช้ logic เดิมของ Capital Planner โดยไม่แก้สูตร Tab 2
+    # 6) NC gate
     stock_thb = max(0.0, sim["inv_coins"]) * coin_price_global
     nc = nc_snapshot(
         stock_thb, p["capital"], p["cex_margin"], p["liab"],
@@ -1478,14 +1428,8 @@ def execute_order(sim, side, amount_thb, ctx):
         nc_status = "pass"
 
     steps.append(dict(
-        n=6,
-        t="ด่านเงินกองทุนสภาพคล่องสุทธิ (Planning Model)",
-        s=nc_status,
-        note=(
-            "NC/Capital เป็น planning model; ไม่ใช่ตัวรับรอง compliance อัตโนมัติ"
-            if nc_status != "pass"
-            else "หลังออเดอร์ยังมี NC buffer เป็นบวกตาม planning model"
-        ),
+        n=6, t="ด่านเงินกองทุนสภาพคล่องสุทธิ (Planning Model)", s=nc_status,
+        note=("NC/Capital เป็น planning model; ไม่ใช่ตัวรับรอง compliance อัตโนมัติ" if nc_status != "pass" else "หลังออเดอร์ยังมี NC buffer เป็นบวกตาม planning model"),
         rows=[
             ("สต็อกหลัง hedge", fmt_baht(stock_thb)),
             ("Cash ใน NC Model", fmt_baht(nc["cash"])),
@@ -1496,23 +1440,13 @@ def execute_order(sim, side, amount_thb, ctx):
         total=("NC Buffer", fmt_baht(nc["buffer"], force_sign=True)),
     ))
 
-    # 7) P&L — ใช้ realized price edge แบบ direction-aware
-    # Buy: dealer ขายให้ลูกค้าที่ quote > global -> positive edge
-    # Sell: dealer ซื้อจากลูกค้าที่ quote < global -> positive edge
-    market_edge = (
-        coins * (quote - coin_price_global)
-        if side == "buy"
-        else coins * (coin_price_global - quote)
-    )
+    # 7) P&L
+    market_edge = (coins * (quote - coin_price_global) if side == "buy" else coins * (coin_price_global - quote))
     fee_rev = trading_fee if p["include_fee_rev"] else 0.0
 
-    # ค่าถอนเหรียญเป็นรายได้เฉพาะฝั่ง Buy ที่มีการส่งเหรียญให้ลูกค้า
     wd_markup_rev = 0.0
     if side == "buy":
-        wd_markup_rev = (
-            p["wd_fee_per_coin"] * coins * coin_price_global
-            + calc_thb_withdrawal_fee(amount_thb, p["bank_type"], p["ktb_wd_fee"])
-        ) * p["wd_markup"]
+        wd_markup_rev = (p["wd_fee_per_coin"] * coins * coin_price_global + calc_thb_withdrawal_fee(amount_thb, p["bank_type"], p["ktb_wd_fee"])) * p["wd_markup"]
 
     ktb_fx_benefit = hedge_thb * (p["ktb_fx_bps"] / 10000.0) if hedged_coins > 0 else 0.0
     hedge_fee_cost = hedge_thb * p["hedge_fee"] if hedged_coins > 0 else 0.0
@@ -1533,14 +1467,8 @@ def execute_order(sim, side, amount_thb, ctx):
     ]
 
     steps.append(dict(
-        n=7,
-        t="กำไรขาดทุนของ Dealer ในออเดอร์นี้",
-        s="pass" if net >= 0 else "warn",
-        note=(
-            "P&L มาจาก realized quote-vs-global edge + fee หักต้นทุน hedge/slippage"
-            if side == "buy"
-            else "Sell-side P&L สะท้อนส่วนต่างระหว่างราคาที่รับซื้อจากลูกค้ากับราคาที่ขายต่อบน Global CEX"
-        ),
+        n=7, t="กำไรขาดทุนของ Dealer ในออเดอร์นี้", s="pass" if net >= 0 else "warn",
+        note=("P&L มาจาก realized quote-vs-global edge + fee หักต้นทุน hedge/slippage" if side == "buy" else "Sell-side P&L สะท้อนส่วนต่างระหว่างราคาที่รับซื้อจากลูกค้ากับราคาที่ขายต่อบน Global CEX"),
         rows=pnl_rows,
         total=("กำไรสุทธิ", f"{fmt_baht(net, force_sign=True)} ({net/amount_thb*10000:,.1f} bps)"),
     ))
@@ -1563,11 +1491,7 @@ def execute_order(sim, side, amount_thb, ctx):
         "FX ใช้สะสม (USD)": sim["fx_used_usd"],
         "CEX Liquidity ใช้สะสม (บาท)": sim["cex_used_thb"],
         "NC Buffer": nc["buffer"],
-        "ผลด่าน": (
-            "ผ่าน"
-            if nc_status == "pass" and residual_unhedged_coins <= 1e-12
-            else ("เฝ้าระวัง" if nc_status != "block" else "NC ไม่พอ")
-        ),
+        "ผลด่าน": ("ผ่าน" if nc_status == "pass" and residual_unhedged_coins <= 1e-12 else ("เฝ้าระวัง" if nc_status != "block" else "NC ไม่พอ")),
     }
     sim["orders"].append(record)
     return steps, record
@@ -1599,37 +1523,18 @@ with tab3:
             a_factor_sim = safety_stock_factor(net_bias_pct, flow_cv_pct, settlement_days, z_alpha)
             target_stock_thb = a_factor_sim * monthly_volume_thb
 
-            # ใช้ cex_margin_thb เป็น liquidity proxy ฝั่ง Customer เท่านั้น
-            # เพื่อรักษา assumption เดิมของ app โดยไม่แตะ Tab 2
             cex_liquidity_thb = max(0.0, float(cex_margin_thb))
 
             ctx = dict(
-                asset=asset,
-                spot_usd=spot_usd_now,
-                usdthb=usdthb_now_sim,
-                local_premium=local_premium,
-                spread=dealer_spread,
-                hedge_fee=hedge_fee,
-                fx_limit=fx_limit_max,
-                daily_vol=daily_vol_now,
-                slip_sens=slippage_sensitivity,
-                include_fee_rev=include_trading_fee_revenue,
-                wd_markup=withdrawal_fee_markup_pct,
-                wd_fee_per_coin=WITHDRAWAL_FEE_TABLE.get(asset, 0.0),
-                bank_type=bank_type,
-                ktb_wd_fee=ktb_wd_fee_thb,
-                ktb_fx_bps=(ktb_fx_spread_bps if use_ktb_fx else 0.0),
-                capital=total_capital_thb,
-                cex_margin=cex_margin_thb,
-                cex_liquidity_thb=cex_liquidity_thb,
-                liab=liab_thb,
-                h_crypto=h_crypto_sim,
-                h_cex=h_cex_sim,
-                fixed_min_nc=fixed_min_nc,
-                trading_risk_rate=trading_risk_rate,
-                daily_volume_thb=daily_volume_thb,
-                custody_rate=custody_rate_blended,
-                hot_breach=hot_wallet_cap_breach,
+                asset=asset, spot_usd=spot_usd_now, usdthb=usdthb_now_sim, local_premium=local_premium,
+                spread=dealer_spread, hedge_fee=hedge_fee, fx_limit=fx_limit_max, daily_vol=daily_vol_now,
+                slip_sens=slippage_sensitivity, include_fee_rev=include_trading_fee_revenue,
+                wd_markup=withdrawal_fee_markup_pct, wd_fee_per_coin=WITHDRAWAL_FEE_TABLE.get(asset, 0.0),
+                bank_type=bank_type, ktb_wd_fee=ktb_wd_fee_thb, ktb_fx_bps=(ktb_fx_spread_bps if use_ktb_fx else 0.0),
+                capital=total_capital_thb, cex_margin=cex_margin_thb, cex_liquidity_thb=cex_liquidity_thb,
+                liab=liab_thb, h_crypto=h_crypto_sim, h_cex=h_cex_sim, fixed_min_nc=fixed_min_nc,
+                trading_risk_rate=trading_risk_rate, daily_volume_thb=daily_volume_thb,
+                custody_rate=custody_rate_blended, hot_breach=hot_wallet_cap_breach,
             )
 
             # ---------- STATE ----------
@@ -1640,15 +1545,11 @@ with tab3:
             )
 
             if need_reset:
-                st.session_state.sim = _sim_defaults(
-                    asset, spot_usd_now, usdthb_now_sim, target_stock_thb
-                )
+                st.session_state.sim = _sim_defaults(asset, spot_usd_now, usdthb_now_sim, target_stock_thb)
                 st.session_state.sim_signature = sim_signature
                 st.session_state.sim_steps = []
 
-            sim = _sim_normalize_state(
-                st.session_state.sim, asset, spot_usd_now, usdthb_now_sim, target_stock_thb
-            )
+            sim = _sim_normalize_state(st.session_state.sim, asset, spot_usd_now, usdthb_now_sim, target_stock_thb)
             st.session_state.sim = sim
 
             coin_price_thb_now = spot_usd_now * usdthb_now_sim
@@ -1676,8 +1577,7 @@ with tab3:
             metric_card(
                 s1[2], "CEX Liquidity ที่ใช้", fmt_baht(sim["cex_used_thb"]),
                 max(0.0, cex_liquidity_thb - sim["cex_used_thb"]),
-                f"เหลือ {fmt_baht(max(0.0, cex_liquidity_thb - sim['cex_used_thb']))} "
-                f"จาก {fmt_baht(cex_liquidity_thb)}",
+                f"เหลือ {fmt_baht(max(0.0, cex_liquidity_thb - sim['cex_used_thb']))} จาก {fmt_baht(cex_liquidity_thb)}",
             )
             metric_card(
                 s1[3], "กำไรสะสมของ Dealer", fmt_baht(sim["pnl_thb"], True), sim["pnl_thb"],
@@ -1685,20 +1585,35 @@ with tab3:
                  if sim["orders"] else "ยังไม่มีออเดอร์"),
             )
 
+            g_cols = st.columns(3)
+            with g_cols[0]:
+                gauge_bar("โควตา Outbound FX",
+                          sim["fx_used_usd"], fx_limit_max,
+                          value_text=f"{sim['fx_used_usd']/fx_limit_max*100:.0f}%" if fx_limit_max > 0 else "N/A",
+                          sub=f"ใช้ $ {sim['fx_used_usd']:,.0f} / $ {fx_limit_max:,.0f}")
+            with g_cols[1]:
+                gauge_bar("CEX Liquidity",
+                          sim["cex_used_thb"], cex_liquidity_thb,
+                          value_text=f"{sim['cex_used_thb']/cex_liquidity_thb*100:.0f}%" if cex_liquidity_thb > 0 else "N/A",
+                          sub=f"ใช้ {fmt_baht(sim['cex_used_thb'])} / {fmt_baht(cex_liquidity_thb)}")
+            with g_cols[2]:
+                nc_use = (nc_now["required"] / nc_now["actual"]) if nc_now["actual"] > 0 else 9.99
+                gauge_bar("NC Utilization (NC ขั้นต่ำ ÷ NC จริง)",
+                          nc_now["required"], max(nc_now["actual"], 0.0),
+                          value_text=f"{nc_use*100:.0f}%" if nc_use < 9 else "เกิน 100%",
+                          sub=f"Buffer {fmt_baht(nc_now['buffer'], True)}",
+                          warn_at=2/3, crit_at=1.0)
+
             if sim["unhedged_thb"] > 0:
                 verdict_box(
-                    False,
-                    f"มี Unhedged Exposure สะสม {fmt_baht(sim['unhedged_thb'])}",
-                    "เกิดจาก Buy-side FX quota หรือ Sell-side CEX liquidity ไม่พอ "
-                    "จึงยังมี inventory exposure ที่ยังไม่ได้ปิด",
+                    False, f"มี Unhedged Exposure สะสม {fmt_baht(sim['unhedged_thb'])}",
+                    "เกิดจาก Buy-side FX quota หรือ Sell-side CEX liquidity ไม่พอ จึงยังมี inventory exposure ที่ยังไม่ได้ปิด",
                 )
 
             if nc_now["buffer"] < 0:
                 verdict_box(
-                    False,
-                    "NC Buffer ติดลบใน Planning Model",
-                    "หลังสถานะปัจจุบัน NC ต่ำกว่า NC ขั้นต่ำที่คำนวณไว้ "
-                    "ไม่ได้หมายความว่าเป็นการรับรอง/วินิจฉัย compliance อัตโนมัติ",
+                    False, "NC Buffer ติดลบใน Planning Model",
+                    "หลังสถานะปัจจุบัน NC ต่ำกว่า NC ขั้นต่ำที่คำนวณไว้ ไม่ได้หมายความว่าเป็นการรับรอง/วินิจฉัย compliance อัตโนมัติ",
                 )
 
             # ---------- ORDER TICKET ----------
@@ -1727,20 +1642,18 @@ with tab3:
                     )
                     send = st.button("📤 ส่งคำสั่ง", type="primary", **WIDE)
 
-                with st.container(border=True):
-                    st.markdown("**จำลองทั้งวัน** — สุ่มออเดอร์ตาม Flow Assumptions ในแถบซ้าย")
+                with st.expander("🤖 เครื่องมือสุ่มออเดอร์อัตโนมัติ", expanded=False):
+                    st.caption("สุ่มออเดอร์ตาม Flow Assumptions ในแถบซ้าย เพื่อดูว่าอะไรตึงก่อนเมื่อมีออเดอร์หลายรายการ")
                     n_orders = st.number_input(
                         "จำนวนออเดอร์ที่จะสุ่ม", value=20, min_value=1,
                         max_value=500, step=10, key="sim_n"
                     )
                     seed = st.number_input("Random seed", value=42, step=1, key="sim_seed")
                     run_day = st.button("🎲 จำลองทั้งวัน", **WIDE)
-                    reset = st.button("♻️ เริ่มวันใหม่ (ล้างสถานะ)", **WIDE)
+                reset = st.button("♻️ เริ่มวันใหม่ (ล้างสถานะ)", **WIDE)
 
                 if reset:
-                    st.session_state.sim = _sim_defaults(
-                        asset, spot_usd_now, usdthb_now_sim, target_stock_thb
-                    )
+                    st.session_state.sim = _sim_defaults(asset, spot_usd_now, usdthb_now_sim, target_stock_thb)
                     st.session_state.sim_signature = sim_signature
                     st.session_state.sim_steps = []
                     st.rerun()
@@ -1761,9 +1674,7 @@ with tab3:
                     for _ in range(int(n_orders)):
                         amt = float(rng.lognormal(mu, sigma))
                         s_ = "buy" if rng.random() < p_buy else "sell"
-                        last_steps, _ = execute_order(
-                            sim, s_, max(amt, MIN_TRADE_THB), ctx
-                        )
+                        last_steps, _ = execute_order(sim, s_, max(amt, MIN_TRADE_THB), ctx)
 
                     st.session_state.sim_steps = last_steps
                     st.rerun()
@@ -1774,11 +1685,7 @@ with tab3:
                 if not steps_now:
                     st.info("ยังไม่มีออเดอร์ — กด **ส่งคำสั่ง** ทางซ้ายเพื่อดูระบบเดินงานทีละด่าน")
                 else:
-                    for s in sorted(steps_now, key=lambda x: x["n"]):
-                        step_card(
-                            s["n"], s["t"], s["s"],
-                            s.get("note", ""), s.get("rows"), s.get("total")
-                        )
+                    render_timeline(steps_now)
 
             # ---------- LEDGER + CHARTS ----------
             if sim["orders"]:
