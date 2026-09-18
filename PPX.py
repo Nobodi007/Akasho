@@ -1336,10 +1336,567 @@ def main():
             cols += ["Actual_Daily_PnL", "Current_FX_Usage", "FX_Limit_Hit"]
             st.dataframe(bt[cols].sort_index(ascending=False).head(100), height=400, **WIDE)
 
-            st.download_button(
+                        st.download_button(
                 "⬇️ ดาวน์โหลด Daily Ledger ทั้งหมด พร้อม Assumptions (CSV)",
                 to_csv_bytes_with_assumptions(
                     bt.sort_index(ascending=False),
-                    dict(asset=asset, global_exchange=global_exchange,
-                         start_date=str(start_date), end_date=str(end_date),
-                         trade_vol_usd_per_day=trade_vol, dealer_spread_pct=dealer_spread * 100
+                    dict(
+                        asset=asset,
+                        global_exchange=global_exchange,
+                        start_date=str(start_date),
+                        end_date=str(end_date),
+                        trade_vol_usd_per_day=trade_vol,
+                        dealer_spread_pct=dealer_spread * 100,
+                        hedge_fee_pct=hedge_fee * 100,
+                        fx_limit_usd_per_month=fx_limit_max,
+                        local_premium_pct=local_premium * 100,
+                        ktb_fx_benefit_bps=(ktb_fx_spread_bps if use_ktb_fx else 0.0),
+                        slippage_sensitivity_pct=slippage_sensitivity * 100,
+                    ),
+                    f"XSpring 5Y Backtest — {asset}",
+                ),
+                f"xspring_backtest_{asset}.csv", "text/csv", **WIDE,
+            )
+
+    # =====================================================================
+    # 5.3 TAB 2 — LIQUIDITY & CAPITAL PLANNER
+    # =====================================================================
+    def _render_tab2():
+        st.markdown("""
+        ตอบคำถามที่ผู้บริหารถามจริง:
+        > **"ถ้าธุรกรรมเดือนละ X ล้าน ต้องดำรงเหรียญเท่าไหร่ เงินสดเท่าไหร่ NC เหลือเท่าไหร่ ผ่านเกณฑ์ไหม และทุนที่มีรับได้สูงสุดกี่ล้าน"**
+        """)
+        if not dates_ok:
+            st.error("❌ ช่วงวันที่ในแถบซ้ายไม่ถูกต้อง")
+            return
+
+        section("🎛️ โหมดคำนวณความเสี่ยง")
+        cp_mode = st.radio("เลือกโหมด",
+                           ["Single-Asset (ใช้เหรียญที่เลือกในแถบซ้าย)", "Multi-Asset Portfolio"],
+                           horizontal=True, key="cp_mode")
+        rp = None
+        risk_label = ""
+        # เฟรมนี้ — ไม่ใช่ `data` ของ single-asset จาก sidebar — คือแหล่งอ้างอิง
+        # เรท USD/THB ด้านล่าง ไม่ว่าจะอยู่โหมดไหน
+        portfolio_price_frame = data if cp_mode.startswith("Single") else None
+
+        if cp_mode.startswith("Single"):
+            if data.empty:
+                st.error(f"⚠️ โหลดข้อมูลไม่สำเร็จ: {data_err}")
+            else:
+                rp = risk_profile(data["Global_USD"])
+                risk_label = asset
+        else:
+            ma_c1, _ = st.columns([2, 1])
+            with ma_c1:
+                selected_assets = st.multiselect("เลือกเหรียญในพอร์ต", SUPPORTED_ASSETS,
+                                                 default=["BTC", "ETH", "USDT"], key="cp_ma_assets")
+            if not selected_assets:
+                st.info("เลือกอย่างน้อย 1 เหรียญ")
+            else:
+                st.columns(min(len(selected_assets), 6))
+                default_w = round(100 / len(selected_assets))
+                weights = {a_: st.number_input(f"{a_} (%)", value=default_w, min_value=0,
+                                               max_value=100, step=5, key=f"cp_w_{a_}")
+                           for a_ in selected_assets}
+                wsum = sum(weights.values())
+                if wsum > 0:
+                    norm_w = {k: v / wsum for k, v in weights.items()}
+                    with st.spinner("กำลังโหลดราคาย้อนหลัง…"):
+                        ret_map, price_map = {}, {}
+                        for a_ in selected_assets:
+                            d_, _err = fetch_price_data(a_, start_date, end_date)
+                            if not d_.empty:
+                                ret_map[a_] = np.log(d_["Global_USD"] / d_["Global_USD"].shift(1))
+                                price_map[a_] = d_
+                    if ret_map:
+                        ret_df = pd.concat(ret_map, axis=1).dropna()
+                        if len(ret_df) >= MIN_RISK_SAMPLE_DAYS:
+                            port_w = np.array([norm_w.get(c, 0) for c in ret_df.columns])
+                            rp = _risk_stats((ret_df * port_w).sum(axis=1))
+                            risk_label = " + ".join(f"{k} {norm_w[k]*100:.0f}%" for k in ret_df.columns)
+                            # ใช้ price frame ของตัวใดตัวหนึ่งในพอร์ตเป็นแหล่ง USD/THB
+                            # (ทุกตัวถือ FX series ชุดเดียวกัน) แทนเฟรม single-asset ที่ไม่เกี่ยวกัน
+                            if price_map:
+                                portfolio_price_frame = next(iter(price_map.values()))
+                        else:
+                            st.warning(
+                                f"⚠️ ข้อมูลที่ใช้ร่วมกันได้มีแค่ {len(ret_df)} วัน "
+                                f"(ต้องการอย่างน้อย {MIN_RISK_SAMPLE_DAYS} วัน) — ขยายช่วงเวลาในแถบซ้าย"
+                            )
+
+        if rp is None:
+            return
+
+        usdthb_now, usdthb_is_fallback = get_reference_usdthb(portfolio_price_frame)
+        if usdthb_is_fallback:
+            st.warning(
+                f"⚠️ ดึงเรท USD/THB ล่าสุดไม่สำเร็จ — ใช้ค่าสำรอง {usdthb_now:,.2f} ชั่วคราว "
+                "ตัวเลขเพดานธุรกรรมด้านล่างจึงเป็นค่าประมาณ ควรรีเฟรชหรือรอเครือข่ายกลับมาก่อนใช้ตัดสินใจจริง"
+            )
+        if rp.get("insufficient_sample"):
+            st.warning(
+                f"⚠️ ใช้ข้อมูลย้อนหลังแค่ {rp['n_obs']} วันในการคำนวณ VaR/ES/Haircut — "
+                f"ต่ำกว่า {RISK_SAMPLE_WARN_DAYS} วันที่ถือว่านิ่งพอสำหรับ tail risk "
+                "ตัวเลข Haircut/Safety Stock ด้านล่างอาจไม่นิ่งและเปลี่ยนแรงถ้าขยับช่วงเวลาแค่นิดเดียว "
+                "ควรขยายช่วง backtest ในแถบซ้ายก่อนใช้ตัดสินใจเรื่องทุนจริง"
+            )
+
+        section(f"📐 โปรไฟล์ความเสี่ยงจากข้อมูลจริง — {risk_label}")
+        rk = st.columns(4)
+        metric_card(rk[0], "Ann. Volatility", f"{rp['ann_vol']*100:.1f}%")
+        metric_card(rk[1], "VaR 99% (1 วัน)", f"{rp['var99']*100:.2f}%")
+        metric_card(rk[2], "Expected Shortfall 99%", f"{rp['es99']*100:.2f}%")
+        metric_card(rk[3], "Worst Single Day", f"-{rp['worst']*100:.1f}%")
+        st.caption(f"คำนวณจากข้อมูล {rp['n_obs']} วัน (log-return, historical method — ไม่ใช่ Monte Carlo/EVT)")
+
+        # ---- แปลงความเสี่ยง → ความต้องการสต็อก/ทุน ----
+        h_crypto = crypto_haircut(rp["es99"], settlement_days)
+        h_cex = cex_counterparty_haircut if cex_margin_asset.startswith("Stablecoin") else h_crypto
+        a_factor = safety_stock_factor(net_bias_pct, flow_cv_pct, settlement_days, z_alpha)
+        required_stock_thb = a_factor * monthly_volume_thb
+
+        nc = nc_snapshot(required_stock_thb, total_capital_thb, cex_margin_thb, liab_thb,
+                         h_crypto, h_cex, fixed_min_nc, trading_risk_rate,
+                         daily_volume_thb, custody_rate_blended)
+        cash_after_stock_thb, nlc_thb = nc["cash"], nc["actual"]
+        required_nc_total, nc_buffer_thb = nc["required"], nc["buffer"]
+
+        # ---- เพดานธุรกรรม: หาจุดที่ตึงที่สุดระหว่างทุน/NC กับ FX Limit ----
+        slope = a_factor * (h_crypto + custody_rate_blended) + trading_risk_rate / 30.0
+        if slope > 0:
+            rhs = (total_capital_thb + cex_margin_thb * (1 - h_cex) - liab_thb - fixed_min_nc)
+            v_nc_thb = max(0.0, rhs / slope)
+        else:
+            v_nc_thb = float("inf")
+        v_cash_thb = (total_capital_thb / a_factor) if a_factor > 0 else float("inf")
+        capital_max_v_thb = min(v_nc_thb, v_cash_thb)
+        fx_max_v_thb = fx_limit_max * usdthb_now
+        overall_max_v_thb = min(capital_max_v_thb, fx_max_v_thb)
+        binding_side = "ทุน / NC" if capital_max_v_thb < fx_max_v_thb else "FX Limit"
+
+        section("🧾 สรุปผลสำหรับผู้บริหาร")
+        ok_nc = (not pd.isna(nc_buffer_thb)) and (nc_buffer_thb >= 0)
+        verdict_box(ok_nc,
+                    f"NC จริง {fmt_baht(nlc_thb)} (ต้องดำรงขั้นต่ำ {fmt_baht(required_nc_total)})",
+                    f"ต้องดองเหรียญ {fmt_baht(required_stock_thb)} เหลือเงินสด {fmt_baht(cash_after_stock_thb)}",
+                    warn=(nc_buffer_thb < 0.5 * required_nc_total))
+        if hot_wallet_cap_breach:
+            verdict_box(False, "ฝ่าฝืนเพดาน Hot Wallet 50%",
+                        "หนี้สินลูกค้าต่ำกว่า 1,000 ลบ. ห้ามเก็บ Hot Wallet เกิน 50%")
+
+        cap_ok = monthly_volume_thb <= overall_max_v_thb
+        verdict_box(cap_ok,
+                    f"เพดานธุรกรรมสูงสุด ≈ {fmt_baht(overall_max_v_thb)}/เดือน (ติดที่: {binding_side})",
+                    f"ทุนรองรับได้ {fmt_baht(capital_max_v_thb)}/เดือน · "
+                    f"FX Limit รองรับได้ {fmt_baht(fx_max_v_thb)}/เดือน")
+
+        section("📊 รายละเอียดตัวเลข")
+        k1 = st.columns(4)
+        metric_card(k1[0], "Required Safety Stock", fmt_baht(required_stock_thb), None,
+                    f"Haircut ที่ใช้ {h_crypto*100:.2f}%")
+        metric_card(k1[1], "เงินสดคงเหลือ", fmt_baht(cash_after_stock_thb), cash_after_stock_thb)
+        metric_card(k1[2], "Net Capital (NC) จริง", fmt_baht(nlc_thb), nlc_thb)
+        metric_card(k1[3], "NC ขั้นต่ำที่ต้องดำรง", fmt_baht(required_nc_total), nc_buffer_thb,
+                    f"ส่วนเกิน {fmt_baht(nc_buffer_thb, force_sign=True)}")
+
+        result_row = pd.DataFrame([{
+            "Ann_Volatility_pct": rp["ann_vol"] * 100,
+            "VaR99_pct": rp["var99"] * 100,
+            "ES99_pct": rp["es99"] * 100,
+            "Crypto_Haircut_pct": h_crypto * 100,
+            "CEX_Haircut_pct": h_cex * 100,
+            "Safety_Stock_Factor": a_factor,
+            "Required_Safety_Stock_THB": required_stock_thb,
+            "Cash_After_Stock_THB": cash_after_stock_thb,
+            "NC_Actual_THB": nlc_thb,
+            "NC_Required_THB": required_nc_total,
+            "NC_Buffer_THB": nc_buffer_thb,
+            "Max_Monthly_Volume_THB": overall_max_v_thb,
+            "Binding_Constraint": binding_side,
+        }])
+        st.download_button(
+            "⬇️ ดาวน์โหลดผลลัพธ์ Scenario นี้ พร้อม Assumptions (CSV)",
+            to_csv_bytes_with_assumptions(
+                result_row,
+                dict(
+                    model_version=MODEL_VERSION, risk_universe=risk_label,
+                    risk_sample_days=rp["n_obs"],
+                    risk_sample_flagged_thin=rp.get("insufficient_sample", False),
+                    net_bias_pct=net_bias_pct * 100, flow_cv_pct=flow_cv_pct * 100,
+                    settlement_lag_days=settlement_days, confidence_level=confidence,
+                    monthly_volume_thb=monthly_volume_thb, total_capital_thb=total_capital_thb,
+                    cex_margin_thb=cex_margin_thb, liab_thb=liab_thb, is_custodian=is_custodian,
+                    fixed_min_nc_thb=fixed_min_nc, trading_risk_rate_pct=trading_risk_rate * 100,
+                    cold_foreign_rate_pct=cold_foreign_rate * 100,
+                    hot_wallet_pct=hot_wallet_pct * 100,
+                    cold_domestic_split_pct=cold_domestic_split_pct * 100,
+                    usdthb_used=usdthb_now, usdthb_is_fallback=usdthb_is_fallback,
+                    fx_limit_usd_per_month=fx_limit_max,
+                ),
+                f"XSpring Capital Planner — {risk_label}",
+            ),
+            "xspring_capital_planner_scenario.csv", "text/csv", **WIDE,
+        )
+
+        with st.expander("📜 Methodology — สำหรับทีม Compliance/กฎหมายรีวิว", expanded=False):
+            st.markdown(f"""
+**Model version: `{MODEL_VERSION}`** — สูตรทั้งหมดด้านล่างอยู่ใน **LAYER 1** ของไฟล์นี้ เพื่อให้รีวิวแยกจาก UI ได้
+
+**⚠️ Disclaimer:** โมเดลนี้เป็น *planning model* สำหรับวางแผนภายใน ไม่ใช่เครื่องมือรับรอง compliance
+อัตโนมัติตามประกาศ ก.ล.ต. ทีมกฎหมาย/compliance ควรรีวิวสูตรด้านล่างเทียบกับเกณฑ์จริงก่อนใช้ตัดสินใจเชิงกำกับดูแล
+
+1. **Value-at-Risk / Expected Shortfall** — `historical method` จาก log-return ของราคาย้อนหลัง
+   `{RISK_SAMPLE_WARN_DAYS}` วันขึ้นไปถือว่าตัวอย่างนิ่งพอ (ต่ำกว่านี้ระบบจะเตือน); ขั้นต่ำที่คำนวณได้คือ {MIN_RISK_SAMPLE_DAYS} วัน
+   *ข้อจำกัด:* เป็น historical เท่านั้น ยังไม่มี Monte Carlo/EVT สำหรับ tail risk
+2. **Crypto Haircut** — `h = min(ES99 × √lag_days, 95%)` จาก `crypto_haircut()`
+3. **Safety Stock Factor** — `a = (max(0,net_bias) × lag + z_α × flow_CV × √lag) / 30` จาก `safety_stock_factor()`
+   Required Safety Stock = `a × monthly_volume_thb`
+4. **Blended Custody NC Rate** — ถ่วงน้ำหนักตามสัดส่วน Hot/Cold wallet จาก `blended_custody_rate()`:
+   Hot wallet = 100% ของมูลค่า, Cold ในประเทศ = 1%, Cold ต่างประเทศ = ตามที่กำหนด (ค่าเริ่มต้น 2%)
+5. **NC Snapshot** — `nc_snapshot()`:
+   - `NC จริง = Cash + Stock×(1−h_crypto) + CEX_Margin×(1−h_cex) − หนี้สิน`
+   - `NC ขั้นต่ำ = Fixed_Min_NC + (Trading_Risk_Rate × Daily_Volume) + (Stock × Custody_Rate)`
+6. **Hot Wallet Cap** — ห้ามเก็บ Hot Wallet เกิน 50% เมื่อหนี้สินลูกค้าต่ำกว่า 1,000 ล้านบาท
+7. **เพดานธุรกรรมสูงสุด/เดือน** — หาจาก 2 ด่านที่ตึงที่สุด: ด้านทุน/NC กับด้าน FX Limit
+   (`FX_Limit_USD × USDTHB`) แล้วเลือกค่าที่ต่ำกว่า
+            """)
+
+    # =====================================================================
+    # 5.4 TAB 3 — TIME-TRAVEL ORDER SIMULATOR
+    # =====================================================================
+    def _render_tab3():
+        st.markdown("""
+        ### 🛒 Time-Travel Order Journey
+        จำลองสถานการณ์จริง: **"เมื่อลูกค้าส่งคำสั่งซื้อ/ขาย ระบบหลังบ้านต้องวิ่งผ่านด่านอะไรบ้าง?"**
+        ทดลองใส่ออเดอร์ด้านซ้าย หรือรันอัตโนมัติ ระบบจะ**สุ่มเดินหน้าวันเวลาไปเรื่อยๆ ตามกรอบเวลาที่เลือก**
+        เพื่อทดสอบว่าถ้ารับลูกค้าต่อเนื่องจนโควตาต่างๆ ถูกใช้ไป ด่านไหนจะแตกก่อนกัน
+        """)
+
+        if data.empty:
+            st.error(f"⚠️ ต้องโหลดราคาจริงก่อนถึงจะจำลองได้: {data_err or 'ไม่สามารถโหลดข้อมูลได้'}")
+            return
+
+        rp_sim = risk_profile(data["Global_USD"])
+        if rp_sim is None:
+            st.error(f"ข้อมูลย้อนหลังน้อยกว่า {MIN_RISK_SAMPLE_DAYS} วัน — เลือกช่วงเวลายาวขึ้นในแถบซ้าย "
+                     "(ต้องใช้คำนวณ Expected Shortfall สำหรับ haircut)")
+            return
+        if rp_sim.get("insufficient_sample"):
+            st.info(
+                f"ℹ️ กำลังใช้ข้อมูล {rp_sim['n_obs']} วันคำนวณ haircut ของซิมูเลเตอร์นี้ — "
+                f"ต่ำกว่า {RISK_SAMPLE_WARN_DAYS} วัน ตัวเลขในหน้านี้จึงเป็นเพียงตัวอย่างสาธิต ไม่ควรใช้ตัดสินใจทุนจริง"
+            )
+
+        h_crypto_sim = crypto_haircut(rp_sim["es99"], settlement_days)
+        h_cex_sim = cex_counterparty_haircut if cex_margin_asset.startswith("Stablecoin") else h_crypto_sim
+        a_factor_sim = safety_stock_factor(net_bias_pct, flow_cv_pct, settlement_days, z_alpha)
+        target_stock_thb = a_factor_sim * monthly_volume_thb
+        cex_liquidity_thb = max(0.0, float(cex_margin_thb))
+
+        ctx = dict(
+            asset=asset, local_premium=local_premium, spread=dealer_spread, hedge_fee=hedge_fee,
+            fx_limit=fx_limit_max, slip_sens=slippage_sensitivity,
+            include_fee_rev=include_trading_fee_revenue,
+            wd_markup=withdrawal_fee_markup_pct, wd_fee_per_coin=WITHDRAWAL_FEE_TABLE.get(asset, 0.0),
+            bank_type=bank_type, ktb_wd_fee=ktb_wd_fee_thb,
+            ktb_fx_bps=(ktb_fx_spread_bps if use_ktb_fx else 0.0),
+            capital=total_capital_thb, cex_margin=cex_margin_thb, cex_liquidity_thb=cex_liquidity_thb,
+            liab=liab_thb, h_crypto=h_crypto_sim, h_cex=h_cex_sim, fixed_min_nc=fixed_min_nc,
+            trading_risk_rate=trading_risk_rate, daily_volume_thb=daily_volume_thb,
+            custody_rate=custody_rate_blended, hot_breach=hot_wallet_cap_breach,
+        )
+
+        # ---- STATE: config เปลี่ยน → รีเซ็ต sim ----
+        signature = sim_config_signature(ctx, target_stock_thb, start_date, end_date)
+        need_reset = ("sim" not in st.session_state) or st.session_state.get("sim_signature") != signature
+
+        if need_reset:
+            start_date_val = pd.to_datetime(data.index[0])
+            st.session_state.sim = sim_defaults(
+                asset, start_date_val,
+                data.loc[start_date_val, "Global_USD"], data.loc[start_date_val, "USDTHB"],
+                target_stock_thb,
+            )
+            st.session_state.sim_signature = signature
+            st.session_state.sim_steps = []
+
+        current_date_val = pd.to_datetime(st.session_state.sim.get("current_date", data.index[0]))
+        if current_date_val not in data.index:
+            current_date_val = pd.to_datetime(data.index[0])
+            st.session_state.sim["current_date"] = current_date_val
+
+        spot_usd_current = float(data.loc[current_date_val, "Global_USD"])
+        usdthb_current = float(data.loc[current_date_val, "USDTHB"])
+
+        sim = sim_normalize_state(st.session_state.sim, asset, current_date_val,
+                                  spot_usd_current, usdthb_current, target_stock_thb)
+        st.session_state.sim = sim
+
+        coin_price_thb_now = spot_usd_current * usdthb_current
+        stock_thb_now = max(0.0, sim["inv_coins"]) * coin_price_thb_now
+        nc_now = nc_snapshot(stock_thb_now, total_capital_thb, cex_margin_thb, liab_thb,
+                             h_crypto_sim, h_cex_sim, fixed_min_nc, trading_risk_rate,
+                             daily_volume_thb, custody_rate_blended)
+
+        # ---- แผงสถานะระบบ ----
+        section(f"📟 สถานะระบบ ณ วันที่จำลอง: {current_date_val.strftime('%Y-%m-%d')}")
+        s1 = st.columns(4)
+        stock_ratio = (stock_thb_now / target_stock_thb * 100) if target_stock_thb > 0 else 0
+        metric_card(s1[0], f"สต็อก {asset} คงเหลือ", fmt_coin(sim["inv_coins"], asset), sim["inv_coins"],
+                    f"{fmt_baht(stock_thb_now)} · {stock_ratio:.0f}% ของเป้า {fmt_baht(target_stock_thb)}")
+        fx_left = max(0.0, fx_limit_max - sim["fx_used_usd"])
+        metric_card(s1[1], "โควตา Outbound FX ที่ใช้", f"$ {sim['fx_used_usd']:,.0f}", fx_left,
+                    f"เหลือ $ {fx_left:,.0f} จาก $ {fx_limit_max:,.0f}")
+        cex_left = max(0.0, cex_liquidity_thb - sim["cex_used_thb"])
+        metric_card(s1[2], "CEX Liquidity ที่ใช้", fmt_baht(sim["cex_used_thb"]), cex_left,
+                    f"เหลือ {fmt_baht(cex_left)} จาก {fmt_baht(cex_liquidity_thb)}")
+        metric_card(s1[3], "กำไรสะสมของ Dealer", fmt_baht(sim["pnl_thb"], True), sim["pnl_thb"],
+                    (f"{len(sim['orders'])} ออเดอร์ · เฉลี่ย "
+                     f"{fmt_baht(sim['pnl_thb']/len(sim['orders']), True)}/ออเดอร์"
+                     if sim["orders"] else "ยังไม่มีออเดอร์"))
+
+        g_cols = st.columns(3)
+        with g_cols[0]:
+            gauge_bar("โควตา Outbound FX", sim["fx_used_usd"], fx_limit_max,
+                      value_text=f"{sim['fx_used_usd']/fx_limit_max*100:.0f}%" if fx_limit_max > 0 else "N/A",
+                      sub=f"ใช้ ${sim['fx_used_usd']:,.0f} /$ {fx_limit_max:,.0f}")
+        with g_cols[1]:
+            gauge_bar("CEX Liquidity", sim["cex_used_thb"], cex_liquidity_thb,
+                      value_text=f"{sim['cex_used_thb']/cex_liquidity_thb*100:.0f}%" if cex_liquidity_thb > 0 else "N/A",
+                      sub=f"ใช้ {fmt_baht(sim['cex_used_thb'])} / {fmt_baht(cex_liquidity_thb)}")
+        with g_cols[2]:
+            nc_use = (nc_now["required"] / nc_now["actual"]) if nc_now["actual"] > 0 else 9.99
+            gauge_bar("NC Utilization (NC ขั้นต่ำ ÷ NC จริง)", nc_now["required"], max(nc_now["actual"], 0.0),
+                      value_text=f"{nc_use*100:.0f}%" if nc_use < 9 else "เกิน 100%",
+                      sub=f"Buffer {fmt_baht(nc_now['buffer'], True)}", warn_at=2/3, crit_at=1.0)
+
+        if sim["unhedged_thb"] > 0:
+            verdict_box(False, f"มี Unhedged Exposure สะสม {fmt_baht(sim['unhedged_thb'])}",
+                        "เกิดจาก Buy-side FX quota หรือ Sell-side CEX liquidity ไม่พอ "
+                        "จึงยังมี inventory exposure ที่ยังไม่ได้ปิด")
+        if nc_now["buffer"] < 0:
+            verdict_box(False, "NC Buffer ติดลบใน Planning Model",
+                        "หลังสถานะปัจจุบัน NC ต่ำกว่า NC ขั้นต่ำที่คำนวณไว้ "
+                        "ไม่ได้หมายความว่าเป็นการรับรอง/วินิจฉัย compliance อัตโนมัติ")
+
+        # ---- ORDER TICKET ----
+        left, right = st.columns([1, 2], gap="large")
+
+        with left:
+            section("🧑‍💻 หน้าจอลูกค้า")
+            with st.container(border=True):
+                order_side = st.radio("ฝั่ง", ["ซื้อ", "ขาย"], horizontal=True, key="sim_side")
+                side_key = "buy" if order_side == "ซื้อ" else "sell"
+                order_amt = comma_number_input(
+                    "มูลค่า (บาท)", value=500_000, min_value=0, key="sim_amount",
+                    help="Gross order notional ที่ลูกค้าระบุ; ค่าธรรมเนียม 0.25% ถูกหักแยกในขั้น settlement",
+                )
+                mid_now = coin_price_thb_now * (1 + local_premium)
+                quote_now = mid_now * (1 + dealer_spread) if side_key == "buy" else mid_now * (1 - dealer_spread)
+                st.caption(
+                    f"ราคา ณ วันที่ {current_date_val.strftime('%Y-%m-%d')}: **฿ {quote_now:,.2f}** / {asset}\n\n"
+                    f"<small>(ราคาโลก $ {spot_usd_current:,.2f} × {usdthb_current:,.2f} "
+                    f"+ premium {local_premium*100:.2f}% "
+                    f"{'+' if side_key == 'buy' else '−'} spread {dealer_spread*100:.2f}%)</small>",
+                    unsafe_allow_html=True,
+                )
+                st.caption(
+                    f"ประมาณ {fmt_coin(order_amt*(1-LOCAL_TRADING_FEE_PCT)/quote_now, asset)} "
+                    f"หลังหักค่าธรรมเนียม {LOCAL_TRADING_FEE_PCT*100:.2f}%"
+                )
+                send = st.button("📤 ส่งคำสั่ง (แมนนวล)", type="primary", **WIDE)
+
+            with st.expander("🤖 เครื่องมือสุ่มออเดอร์อัตโนมัติ", expanded=False):
+                st.caption("สุ่มออเดอร์กระจายในกรอบเวลา เพื่อดูว่าอะไรตึงก่อนเมื่อมีออเดอร์หลายรายการ")
+                n_orders = st.number_input("จำนวนออเดอร์ที่จะสุ่ม", value=20, min_value=1,
+                                           max_value=500, step=10, key="sim_n")
+                seed = st.number_input("Random seed", value=42, step=1, key="sim_seed")
+                run_day = st.button("🎲 รันชุดออเดอร์ (Batch)", **WIDE)
+            reset = st.button("♻️ เริ่มต้นระบบใหม่ (ล้างสถานะ)", **WIDE)
+
+            if reset:
+                start_date_val = pd.to_datetime(data.index[0])
+                st.session_state.sim = sim_defaults(
+                    asset, start_date_val,
+                    data.loc[start_date_val, "Global_USD"], data.loc[start_date_val, "USDTHB"],
+                    target_stock_thb,
+                )
+                st.session_state.sim_signature = signature
+                st.session_state.sim_steps = []
+                st.rerun()
+
+            if send:
+                steps, _ = execute_order(sim, side_key, float(order_amt), current_date_val,
+                                         data.loc[current_date_val], ctx)
+                st.session_state.sim_steps = steps
+                valid_dates = data[data.index >= current_date_val].index
+                sim["current_date"] = (pd.to_datetime(np.random.choice(valid_dates))
+                                       if len(valid_dates) > 1 else pd.to_datetime(data.index[-1]))
+                st.rerun()
+
+            if run_day:
+                rng = np.random.default_rng(int(seed))
+                mean_amt = daily_volume_thb / max(1, int(n_orders))
+                sigma = np.sqrt(np.log(1 + flow_cv_pct ** 2))
+                mu = np.log(max(mean_amt, 1.0)) - 0.5 * sigma ** 2
+                p_buy = 0.5 + net_bias_pct / 2.0
+                last_steps = []
+
+                valid_dates = data[data.index >= current_date_val].index
+                if len(valid_dates) > 0:
+                    chosen_dates = pd.to_datetime(sorted(rng.choice(valid_dates, size=int(n_orders), replace=True)))
+                else:
+                    chosen_dates = [current_date_val] * int(n_orders)
+
+                for d in chosen_dates:
+                    amt = float(rng.lognormal(mu, sigma))
+                    s_ = "buy" if rng.random() < p_buy else "sell"
+                    last_steps, _ = execute_order(sim, s_, max(amt, MIN_TRADE_THB), d, data.loc[d], ctx)
+
+                sim["current_date"] = pd.to_datetime(chosen_dates[-1])
+                st.session_state.sim_steps = last_steps
+                st.rerun()
+
+        with right:
+            section("🔎 เส้นทางหลังบ้านของออเดอร์ล่าสุด")
+            steps_now = st.session_state.get("sim_steps", [])
+            if not steps_now:
+                st.info("ยังไม่มีออเดอร์ — กด **ส่งคำสั่ง** ทางซ้ายเพื่อดูระบบเดินงานทีละด่าน")
+            else:
+                render_timeline(steps_now)
+
+        # ---- LEDGER + CHARTS ----
+        if sim["orders"]:
+            section("📒 สมุดออเดอร์")
+            led = pd.DataFrame(sim["orders"])
+            led.index = range(1, len(led) + 1)
+            led.index.name = "#"
+
+            lc = st.columns(4)
+            buys = int((led["ฝั่ง"] == "ซื้อ").sum())
+            blocked = int((led["ผลด่าน"] != "ผ่าน").sum())
+            total_notional = led["มูลค่า (บาท)"].sum()
+            margin_bps = led["กำไรออเดอร์"].sum() / total_notional * 10000 if total_notional else 0.0
+            metric_card(lc[0], "จำนวนออเดอร์", f"{len(led):,}", None, f"ซื้อ {buys} · ขาย {len(led)-buys}")
+            metric_card(lc[1], "Notional รวม", fmt_baht(total_notional), None, "มูลค่าธุรกรรมรวม (ไม่ใช่กำไร)")
+            metric_card(lc[2], "มาร์จิ้นเฉลี่ย", f"{margin_bps:,.1f} bps",
+                        led["กำไรออเดอร์"].sum(), "P&L รวม ÷ Notional รวม")
+            metric_card(lc[3], "ออเดอร์ที่ต้องเฝ้าระวัง/ติดด่าน", f"{blocked:,}", -1 if blocked else 0,
+                        f"{blocked/len(led)*100:.1f}% ของทั้งหมด")
+
+            g1, g2 = st.columns(2)
+            with g1:
+                fig_pnl = go.Figure()
+                fig_pnl.add_trace(go.Scatter(y=led["กำไรออเดอร์"].cumsum(), x=led.index, name="กำไรสะสม",
+                                             line=dict(color="#00D26A", width=2), fill="tozeroy",
+                                             fillcolor="rgba(0,210,106,.12)"))
+                fig_pnl.update_layout(template="plotly_dark", height=320, margin=dict(t=40, b=20),
+                                      title="กำไรสะสมรายออเดอร์", xaxis_title="ออเดอร์ที่",
+                                      yaxis_title="THB", showlegend=False)
+                st.plotly_chart(fig_pnl, **WIDE)
+            with g2:
+                fig_gate = go.Figure()
+                fig_gate.add_trace(go.Scatter(y=led["FX ใช้สะสม (USD)"], x=led.index,
+                                              name="FX ใช้สะสม", line=dict(color="#3B82F6", width=2)))
+                fig_gate.add_hline(y=fx_limit_max, line=dict(color="#FF4B4B", dash="dash"),
+                                   annotation_text="เพดาน FX Limit")
+                fig_gate.update_layout(template="plotly_dark", height=320, margin=dict(t=40, b=20),
+                                       title="โควตา Outbound FX ที่ใช้ไป", xaxis_title="ออเดอร์ที่",
+                                       yaxis_title="USD", showlegend=False)
+                st.plotly_chart(fig_gate, **WIDE)
+
+            fig_cex = go.Figure()
+            fig_cex.add_trace(go.Scatter(y=led["CEX Liquidity ใช้สะสม (บาท)"], x=led.index,
+                                         name="CEX Liquidity ใช้สะสม", line=dict(color="#8B5CF6", width=2)))
+            fig_cex.add_hline(y=cex_liquidity_thb, line=dict(color="#FF4B4B", dash="dash"),
+                              annotation_text="CEX Liquidity")
+            fig_cex.update_layout(template="plotly_dark", height=300, margin=dict(t=40, b=20),
+                                  title="CEX Liquidity ที่ใช้ไป", xaxis_title="ออเดอร์ที่",
+                                  yaxis_title="THB", showlegend=False)
+            st.plotly_chart(fig_cex, **WIDE)
+
+            fig_nc = go.Figure()
+            fig_nc.add_trace(go.Scatter(y=led["NC Buffer"], x=led.index, name="NC Buffer",
+                                        line=dict(color="#F59E0B", width=2)))
+            fig_nc.add_hline(y=0, line=dict(color="#FF4B4B", dash="dash"), annotation_text="เกณฑ์ขั้นต่ำ")
+            fig_nc.update_layout(template="plotly_dark", height=300, margin=dict(t=40, b=20),
+                                 title="NC Buffer หลังแต่ละออเดอร์", xaxis_title="ออเดอร์ที่",
+                                 yaxis_title="THB", showlegend=False)
+            st.plotly_chart(fig_nc, **WIDE)
+
+            st.dataframe(
+                led.sort_index(ascending=False), height=380, **WIDE,
+                column_config={
+                    "วันที่": st.column_config.TextColumn(),
+                    "มูลค่า (บาท)": st.column_config.NumberColumn(format="%.0f"),
+                    "ราคาที่ลูกค้าได้": st.column_config.NumberColumn(format="%.2f"),
+                    "เหรียญที่ส่งมอบ": st.column_config.NumberColumn(format="%.6f"),
+                    "Hedge (เหรียญ)": st.column_config.NumberColumn(format="%.6f"),
+                    "Hedge (USD)": st.column_config.NumberColumn(format="%.0f"),
+                    "CEX Liquidity ใช้ (บาท)": st.column_config.NumberColumn(format="%.0f"),
+                    "Unhedged (บาท)": st.column_config.NumberColumn(format="%.0f"),
+                    "Market Edge": st.column_config.NumberColumn(format="%.0f"),
+                    "รายได้": st.column_config.NumberColumn(format="%.0f"),
+                    "ต้นทุน": st.column_config.NumberColumn(format="%.0f"),
+                    "กำไรออเดอร์": st.column_config.NumberColumn(format="%.0f"),
+                    "สต็อกคงเหลือ": st.column_config.NumberColumn(format="%.6f"),
+                    "FX ใช้สะสม (USD)": st.column_config.NumberColumn(format="%.0f"),
+                    "CEX Liquidity ใช้สะสม (บาท)": st.column_config.NumberColumn(format="%.0f"),
+                    "NC Buffer": st.column_config.NumberColumn(format="%.0f"),
+                },
+            )
+            st.download_button(
+                "⬇️ ดาวน์โหลดสมุดออเดอร์ พร้อม Assumptions (CSV)",
+                to_csv_bytes_with_assumptions(
+                    led.sort_index(ascending=False),
+                    dict(model_version=MODEL_VERSION, **ctx),
+                    f"XSpring Time-Travel Order Journey — {asset}",
+                ),
+                f"xspring_orders_{asset}.csv", "text/csv", **WIDE,
+            )
+
+        with st.expander("📐 สมมติฐานของ Customer Order Simulator"):
+            st.markdown(f"""
+- **Model version:** `{MODEL_VERSION}`
+- **การจำลองเวลา (Time-Travel):** ระบบเริ่มจากวันแรกของช่วงข้อมูลที่เลือก และจะสุ่มก้าวไปสู่วันถัดๆ ไป (ภายในกรอบเวลา) ทุกครั้งที่มีออเดอร์
+- ราคาอ้างอิง: ใช้ราคาปิดและอัตราแลกเปลี่ยนจริง **ณ วันที่สุ่มได้นั้นๆ**
+- เป้าสต็อกสำรอง `I* = a × V` → `{fmt_baht(target_stock_thb)}` ≈ `{fmt_coin(target_stock_thb/coin_price_thb_now, asset)}`
+- **Buy-side:** หลังส่งมอบ ระบบเติม inventory กลับด้วยการซื้อบน Global CEX โดยกิน **Outbound FX quota**
+- **Sell-side:** หลังรับเหรียญ ระบบขาย inventory ส่วนเกินบน Global CEX โดยใช้ **CEX liquidity เดิม** และ **ไม่กิน outbound FX quota**
+- Buy-side hedge ได้ **บางส่วน** เมื่อ FX quota ไม่พอ; inventory จะไม่ถูกปล่อยให้ติดลบ
+- Sell-side hedge ได้ **บางส่วน** เมื่อ CEX liquidity ไม่พอ; ส่วนเกินกลายเป็น inventory exposure
+- P&L ของออเดอร์ใช้ **Market Edge จาก Quote เทียบ Global Reference แบบ direction-aware** + fee/benefit หักต้นทุน hedge/slippage
+- NC/Capital ในหน้านี้ใช้ **planning model เดียวกับ Capital Planner** ไม่ใช่ตัวรับรอง compliance อัตโนมัติ
+- CEX liquidity ฝั่ง Customer ใช้ค่า **CEX Margin เดิม (`{fmt_baht(cex_margin_thb)}`)** เป็น proxy
+            """)
+
+    # =====================================================================
+    # 5.5 RENDER
+    # =====================================================================
+    with tab1:
+        _render_tab1()
+    with tab2:
+        _render_tab2()
+    with tab3:
+        _render_tab3()
+
+    st.markdown(
+        f"<div class='xs-foot'>XSpring Dealer Suite · Model v{MODEL_VERSION} · "
+        "Planning model เพื่อการวางแผนภายในเท่านั้น ไม่ใช่เครื่องมือรับรอง compliance</div>",
+        unsafe_allow_html=True,
+    )
+
+
+# =========================================================================
+# ENTRY POINT
+#   Streamlit รันไฟล์นี้เป็น __main__ → UI ทำงาน
+#   unittest `import PPX` → ได้เฉพาะ LAYER 0-1 ไม่มี side effect
+# =========================================================================
+
+if __name__ == "__main__":
+    if not HAS_UI:
+        raise SystemExit(
+            "ต้องติดตั้ง UI stack ก่อน: pip install streamlit plotly yfinance"
+        )
+    main()
