@@ -1,10 +1,3 @@
-จัดให้เต็มระบบเลยครับ! ผมเอาโค้ดทั้ง 4 ส่วนที่คุณส่งมา ยัดรวมเข้าไปในโครงสร้างเดิม (Layer 2, 3 และ 5) ให้ครบถ้วนแบบไร้รอยต่อ และปรับปรุงจุดเล็กๆ อย่างสีแดง/เขียวให้เข้ากับธีมของแอปด้วยครับ
-
-รวมถึงผมได้ใส่ตัวช่วยดักจับข้อมูล Multi-index ของ `yfinance` ในฟังก์ชันดึงราคาตลาดให้ด้วย (กันบั๊กเวอร์ชันใหม่)
-
-ก๊อปปี้โค้ดด้านล่างไปทับไฟล์เดิมได้เลยครับ รันแล้วจะได้แท็บที่ 4 **"Market Overview"** โผล่มาสวยๆ ทันทีครับ:
-
-```python
 """
 XSpring Dealer Suite — Single-File Build
 =========================================
@@ -17,7 +10,7 @@ LAYERS
   2. DATA LAYER             yfinance / cache / CSV export
   3. UI THEME & COMPONENTS  CSS, metric card, timeline, gauge, TradingView
   4. AUDIT TRAIL            log การเปลี่ยนพารามิเตอร์
-  5. APP                    sidebar + 4 tabs (อยู่ใน main() ทั้งหมด)
+  5. APP                    sidebar + 3 tabs (อยู่ใน main() ทั้งหมด)
 
 TESTABILITY
 -----------
@@ -2232,6 +2225,21 @@ def render_tab1(cfg: dict[str, Any], data: pd.DataFrame, data_err: Optional[str]
     section(f"📉 ราคาเรียลไทม์ — {asset}")
     render_tv_panel(asset)
 
+    # ---- Market Overview ----
+    section("🌍 ภาพรวมตลาด (Market Overview)")
+    favorites = st.session_state.get("favorite_tickers", [])
+    market_df = fetch_market_overview(SUPPORTED_ASSETS, favorites)
+    
+    sub1, sub2, sub3, sub4 = st.tabs(["⭐ รายการโปรด", "ปริมาณ 24 ชม.", "% เพิ่มสูงสุด", "% ลดสูงสุด"])
+    with sub1:
+        render_market_table(market_df, "favorite")
+    with sub2:
+        render_market_table(market_df, "volume")
+    with sub3:
+        render_market_table(market_df, "top_gain")
+    with sub4:
+        render_market_table(market_df, "top_loss")
+
     # ---- Performance ----
     section("📈 Performance Summary")
     r1 = st.columns(4)
@@ -2854,7 +2862,7 @@ def render_tab3(cfg: dict[str, Any], data: pd.DataFrame, data_err: Optional[str]
     with left:
         section("🧑‍💻 หน้าจอลูกค้า")
 
-        # --- UI แสดงพอร์ตโฟลิโอของลูกค้าแบบ Bitkub (แก้ไขแล้ว ไร้ช่องว่างกวนใจ Streamlit) ---
+        # --- UI แสดงพอร์ตโฟลิโอของลูกค้าแบบ Bitkub ---
         customer_coins = sim.get("customer_coins", 0.0)
         mid_now = coin_price_thb_now * (1 + cfg["local_premium"])
         port_val_thb = customer_coins * mid_now
@@ -3180,11 +3188,11 @@ def main() -> None:
                                           cfg["end_date"],
                                           use_fx_proxy=cfg["use_fx_proxy"])
 
-    tab1, tab2, tab3, tab4 = st.tabs([
+    # ตัดเหลือ 3 แท็บเหมือนเดิม นำ Market Overview ไปใส่ใน Tab 1
+    tab1, tab2, tab3 = st.tabs([
         "📊 5-Year Backtest Simulator",
         "🧮 Liquidity & Capital Planner",
         "🛒 Time-Travel Order Simulator",
-        "🌐 Market Overview",
     ])
 
     with tab1:
@@ -3193,20 +3201,6 @@ def main() -> None:
         render_tab2(cfg, data, data_err)
     with tab3:
         render_tab3(cfg, data, data_err)
-    with tab4:
-        st.subheader("📊 Market Overview")
-        favorites = st.session_state.get("favorite_tickers", [])
-        market_df = fetch_market_overview(SUPPORTED_ASSETS, favorites)
-
-        sub1, sub2, sub3, sub4 = st.tabs(["⭐ รายการโปรด", "ปริมาณ 24 ชม.", "% เพิ่มสูงสุด", "% ลดสูงสุด"])
-        with sub1:
-            render_market_table(market_df, "favorite")
-        with sub2:
-            render_market_table(market_df, "volume")
-        with sub3:
-            render_market_table(market_df, "top_gain")
-        with sub4:
-            render_market_table(market_df, "top_loss")
 
     st.markdown(
         f"<div class='xs-foot'>XSpring Dealer Suite · Model v{MODEL_VERSION} · "
@@ -3227,5 +3221,3 @@ if __name__ == "__main__":
     if not HAS_UI:
         raise SystemExit("ต้องติดตั้ง UI stack ก่อน: pip install streamlit plotly yfinance")
     main()
-
-```
