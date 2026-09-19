@@ -32,7 +32,7 @@ v1.3.0              ปรับตามรีวิวรอบล่าสุ
                       + Type hints ทั้ง LAYER 1 / 2 / 4
                       + LAYER 0 โหลด override จาก config.yaml (validate เข้ม,
                         key พิมพ์ผิด = error) + config fingerprint ใน CSV export
-                      + Audit log ถาวร (.jsonl) ควบคู่กับ session log เดิม
+                      + Audit logถาวร (.jsonl) ควบคู่กับ session log เดิม
                       + Slippage ตามขนาดออเดอร์ / market depth (depth = 0 -> ปิด)
                       + Maker/Taker fee แยกกัน (maker ratio = 0 -> ปิด)
                       + แสดงวันที่ USD/THB ค้าง (เสาร์-อาทิตย์/วันหยุด) และ
@@ -628,6 +628,7 @@ def sim_defaults(asset_name: str, start_date_val: Any, spot_usd: float,
         "unhedged_thb": 0.0,
         "orders": [],
         "current_date": start_date_val,
+        "customer_coins": 0.0,
     }
 
 
@@ -669,8 +670,9 @@ def sim_normalize_state(sim: Any, asset: str, start_date_val: Any,
     sim.setdefault("unhedged_thb", 0.0)
     sim.setdefault("orders", [])
     sim.setdefault("current_date", start_date_val)
+    sim.setdefault("customer_coins", 0.0)
 
-    for key in ("fx_used_usd", "cex_used_thb", "pnl_thb", "unhedged_thb"):
+    for key in ("fx_used_usd", "cex_used_thb", "pnl_thb", "unhedged_thb", "customer_coins"):
         try:
             sim[key] = float(sim[key])
             if not np.isfinite(sim[key]):
@@ -819,7 +821,7 @@ def execute_order(
             ("มูลค่าที่ลูกค้าใส่", fmt_baht(amount_thb)),
             (f"ค่าธรรมเนียมซื้อขาย {LOCAL_TRADING_FEE_PCT * 100:.2f}%",
              "- " + fmt_baht(trading_fee)),
-            ("ฐาน settlement หลังค่าธรรมเนียม", fmt_baht(settlement_thb)),
+            ("ฐาน settlementหลังค่าธรรมเนียม", fmt_baht(settlement_thb)),
         ],
         total=("เหรียญที่ลูกค้าได้" if side == "buy" else "เหรียญที่ลูกค้าส่งมอบ",
                fmt_coin(coins, sim["asset"])),
@@ -1058,6 +1060,11 @@ def execute_order(
         gate_result = "เฝ้าระวัง"
     else:
         gate_result = "NC ไม่พอ"
+
+    if side == "buy":
+        sim["customer_coins"] = sim.get("customer_coins", 0.0) + coins
+    else:
+        sim["customer_coins"] = sim.get("customer_coins", 0.0) - coins
 
     record = {
         "วันที่": order_date.strftime("%Y-%m-%d"),
@@ -2789,6 +2796,34 @@ def render_tab3(cfg: dict[str, Any], data: pd.DataFrame, data_err: Optional[str]
 
     with left:
         section("🧑‍💻 หน้าจอลูกค้า")
+        
+        # --- UI แสดงพอร์ตโฟลิโอของลูกค้า ---
+        customer_coins = sim.get("customer_coins", 0.0)
+        mid_now = coin_price_thb_now * (1 + cfg["local_premium"])
+        port_val_thb = customer_coins * mid_now
+
+        st.markdown(
+            f"""
+            <div style='background:#0f1621; border:1px solid #1f2937; border-radius:12px; padding:16px; margin-bottom:16px;'>
+                <div style='display:flex; justify-content:space-between; align-items:center;'>
+                    <h4 style='margin:0; color:#FAFAFA;'>💼 My Portfolio</h4>
+                    <span style='background:rgba(0,210,106,0.15); color:#00D26A; padding:2px 10px; border-radius:999px; font-size:0.75rem; font-weight:bold;'>Simulated</span>
+                </div>
+                <div style='display:flex; justify-content:space-between; margin-top:12px;'>
+                    <div>
+                        <div style='color:#9CA3AF; font-size:0.8rem;'>จำนวน {asset} คงเหลือ</div>
+                        <div style='font-size:1.4rem; font-weight:700; color:#00D26A;'>{fmt_coin(customer_coins, asset)}</div>
+                    </div>
+                    <div style='text-align:right;'>
+                        <div style='color:#9CA3AF; font-size:0.8rem;'>มูลค่าประเมิน (THB)</div>
+                        <div style='font-size:1.4rem; font-weight:700; color:#FAFAFA;'>{fmt_baht(port_val_thb)}</div>
+                    </div>
+                </div>
+            </div>
+            """, unsafe_allow_html=True
+        )
+        # -------------------------------------------------
+
         with st.container(border=True):
             order_side = st.radio("ฝั่ง", ["ซื้อ", "ขาย"], horizontal=True,
                                   key="sim_side")
@@ -2798,7 +2833,7 @@ def render_tab3(cfg: dict[str, Any], data: pd.DataFrame, data_err: Optional[str]
                 help=("Gross order notional ที่ลูกค้าระบุ; ค่าธรรมเนียม 0.25% "
                       "ถูกหักแยกในขั้น settlement"),
             )
-            mid_now = coin_price_thb_now * (1 + cfg["local_premium"])
+            
             if side_key == "buy":
                 quote_now = mid_now * (1 + cfg["dealer_spread"])
             else:
