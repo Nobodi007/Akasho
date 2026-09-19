@@ -10,7 +10,7 @@ LAYERS
   2. DATA LAYER             yfinance / cache / CSV export
   3. UI THEME & COMPONENTS  CSS, metric card, timeline, gauge, TradingView
   4. AUDIT TRAIL            log การเปลี่ยนพารามิเตอร์
-  5. APP                    sidebar + 4 tabs (อยู่ใน main() ทั้งหมด)
+  5. APP                    sidebar + 3 tabs (อยู่ใน main() ทั้งหมด)
 
 TESTABILITY
 -----------
@@ -24,6 +24,7 @@ v1.4.0              เพิ่ม Market Overview (รายการโปร
                       + Multi-coin customer wallet (ถือได้หลายเหรียญพร้อมกัน ไม่รีเซ็ตเมื่อเปลี่ยนเหรียญ)
                       + ปรับแก้ UI ตัดแถบ Navbar ออก และแก้บัคโลโก้เหรียญไม่ขึ้น
                       + แก้ไขบักการประเมินมูลค่าพอร์ตลูกค้า (Cross-asset valuation)
+                      + แก้ไขบัค Markdown Code Block render HTML ดิบ
 """
 
 from __future__ import annotations
@@ -1050,7 +1051,6 @@ def fetch_market_overview(tickers: list[str], favorites: list[str] = None) -> pd
     rows = []
     for t in tickers:
         try:
-            # ดึงราคาเป็น USD เพื่อความแม่นยำ ป้องกันบัคจาก yfinance ยอดเด้ง
             data = yf.download(f"{t}-USD", period="2d", interval="1h", progress=False)
             if data.empty:
                 continue
@@ -2024,6 +2024,7 @@ def render_tab1(cfg: dict[str, Any], data: pd.DataFrame, data_err: Optional[str]
 
     # ---- Market Overview ----
     section("🌍 ภาพรวมตลาด (Market Overview)")
+    favorites = st.session_state.get("favorite_tickers", [])
     st.multiselect(
         "⭐ เลือกเหรียญที่ต้องการปักเป็นรายการโปรด",
         SUPPORTED_ASSETS, key="favorite_tickers",
@@ -2672,21 +2673,19 @@ def render_tab3(cfg: dict[str, Any], data: pd.DataFrame, data_err: Optional[str]
             colors = ["#2563EB", "#DC2626", "#D97706", "#059669", "#7C3AED", "#DB2777", "#0891B2"]
             bg_color = colors[sum(ord(c) for c in sym) % len(colors)]
             
-            coin_rows_html += f'''
-            <div style="display:flex;justify-content:space-between;align-items:center;padding:16px 0;border-bottom:1px solid #1f2937;">
-                <div style="display:flex;align-items:center;gap:12px;">
-                    <div style="background:{bg_color};border-radius:50%;width:32px;height:32px;display:flex;align-items:center;justify-content:center;color:white;font-weight:bold;font-size:1.1rem;">{icon_letter}</div>
-                    <div>
-                        <div style="color:white;font-weight:bold;font-size:1.1rem;">{sym}</div>
-                        <div style="color:#6B7280;font-size:0.85rem;margin-top:2px;">จำนวนที่ใช้ได้</div>
-                    </div>
-                </div>
-                <div style="text-align:right;">
-                    <div style="color:white;font-weight:bold;font-size:1.1rem;">{fmt_coin(qty, "").strip()} <span style="color:#6B7280;">&gt;</span></div>
-                    <div style="color:#6B7280;font-size:0.85rem;margin-top:2px;">{fmt_num(val_thb)} THB</div>
-                </div>
-            </div>
-            '''
+            coin_rows_html += f"""<div style="display:flex;justify-content:space-between;align-items:center;padding:16px 0;border-bottom:1px solid #1f2937;">
+<div style="display:flex;align-items:center;gap:12px;">
+<div style="background:{bg_color};border-radius:50%;width:32px;height:32px;display:flex;align-items:center;justify-content:center;color:white;font-weight:bold;font-size:1.1rem;">{icon_letter}</div>
+<div>
+<div style="color:white;font-weight:bold;font-size:1.1rem;">{sym}</div>
+<div style="color:#6B7280;font-size:0.85rem;margin-top:2px;">จำนวนที่ใช้ได้</div>
+</div>
+</div>
+<div style="text-align:right;">
+<div style="color:white;font-weight:bold;font-size:1.1rem;">{fmt_coin(qty, "").strip()} <span style="color:#6B7280;">&gt;</span></div>
+<div style="color:#6B7280;font-size:0.85rem;margin-top:2px;">{fmt_num(val_thb)} THB</div>
+</div>
+</div>"""
 
         if not coin_rows_html:
             coin_rows_html = ('<div style="padding:16px 0;color:#6B7280;'
