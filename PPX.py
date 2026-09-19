@@ -506,11 +506,14 @@ def sim_defaults(asset_name: str, start_date_val: Any, spot_usd: float,
 def sim_config_signature(ctx: Mapping[str, Any], target_stock_thb: float,
                          start_date: Any, end_date: Any) -> tuple:
     # ถอด "asset" ออกจาก signature ทำให้เวลาเปลี่ยนเหรียญใน sidebar ระบบไม่รีเซ็ตข้อมูล
+    # หมายเหตุ: "h_crypto"/"h_cex" ก็ถอดออกด้วย เพราะสองค่านี้คำนวณจาก volatility
+    # ของเหรียญที่เลือกอยู่ ณ ขณะนั้น (เปลี่ยนเหรียญ = ค่าเปลี่ยนตาม) ถ้าเก็บไว้ใน
+    # signature จะทำให้ระบบรีเซ็ตทุกครั้งที่สลับเหรียญ ทั้งที่ตั้งใจไม่ให้รีเซ็ต
     keys = [
         "local_premium", "spread", "hedge_fee",
         "fx_limit", "slip_sens", "include_fee_rev",
         "wd_markup", "bank_type", "ktb_wd_fee", "ktb_fx_bps",
-        "capital", "cex_margin", "cex_liquidity_thb", "liab", "h_crypto", "h_cex",
+        "capital", "cex_margin", "cex_liquidity_thb", "liab",
         "fixed_min_nc", "trading_risk_rate", "daily_volume_thb", "custody_rate",
         "hot_breach", "market_depth_usd", "impact_penalty",
     ]
@@ -2668,7 +2671,12 @@ def render_tab3(cfg: dict[str, Any], data: pd.DataFrame, data_err: Optional[str]
         coin_rows_html = "".join(f'''
 <div style="display:flex;justify-content:space-between;align-items:center;padding:16px 0;border-bottom:1px solid #1f2937;">
 <div style="display:flex;align-items:center;gap:12px;">
-<div style="background:#2563EB;border-radius:50%;width:32px;height:32px;display:flex;align-items:center;justify-content:center;color:white;font-weight:bold;font-size:1rem;">{sym[0]}</div>
+<div style="position:relative;width:32px;height:32px;">
+<img src="https://cdn.jsdelivr.net/gh/atomiclabs/cryptocurrency-icons@1.0.2/128/color/{sym.lower()}.png"
+     onerror="this.style.display='none';this.nextElementSibling.style.display='flex';"
+     style="width:32px;height:32px;border-radius:50%;display:block;background:#1a1f24;">
+<div style="display:none;position:absolute;top:0;left:0;background:#2563EB;border-radius:50%;width:32px;height:32px;align-items:center;justify-content:center;color:white;font-weight:bold;font-size:1rem;">{sym[0]}</div>
+</div>
 <div>
 <div style="color:white;font-weight:bold;font-size:1.1rem;">{sym}</div>
 <div style="color:#6B7280;font-size:0.85rem;margin-top:2px;">จำนวนที่ใช้ได้</div>
