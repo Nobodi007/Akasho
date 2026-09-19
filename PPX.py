@@ -32,7 +32,7 @@ v1.3.0              ปรับตามรีวิวรอบล่าสุ
                       + Type hints ทั้ง LAYER 1 / 2 / 4
                       + LAYER 0 โหลด override จาก config.yaml (validate เข้ม,
                         key พิมพ์ผิด = error) + config fingerprint ใน CSV export
-                      + Audit log ถาวร (.jsonl) ควบคู่กับ session log เดิม
+                      + Audit logถาวร (.jsonl) ควบคู่กับ session log เดิม
                       + Slippage ตามขนาดออเดอร์ / market depth (depth = 0 -> ปิด)
                       + Maker/Taker fee แยกกัน (maker ratio = 0 -> ปิด)
                       + แสดงวันที่ USD/THB ค้าง (เสาร์-อาทิตย์/วันหยุด) และ
@@ -2491,7 +2491,7 @@ def render_tab2(cfg: dict[str, Any], data: pd.DataFrame, data_err: Optional[str]
 4. **Blended Custody NC Rate** — ถ่วงน้ำหนักตามสัดส่วน Hot/Cold wallet จาก `blended_custody_rate()`:
    Hot wallet = 100% ของมูลค่า, Cold ในประเทศ = 1%, Cold ต่างประเทศ = ตามที่กำหนด (เริ่มต้น 2%)
 5. **NC Snapshot** — `nc_snapshot()`:
-   - `NC จริง = Cash + Stock×(1−h_crypto) + CEX_Margin×(1−h_cex) − หหนี้สิน`
+   - `NC จริง = Cash + Stock×(1−h_crypto) + CEX_Margin×(1−h_cex) − หนี้สิน`
    - `NC ขั้นต่ำ = Fixed_Min_NC + (Trading_Risk_Rate × Daily_Volume) + (Stock × Custody_Rate)`
 6. **Hot Wallet Cap** — ห้ามเก็บ Hot Wallet เกิน 50% เมื่อหนี้สินลูกค้าต่ำกว่า 1,000 ล้านบาท
 7. **เพดานธุรกรรมสูงสุด/เดือน** — หาจาก 2 ด่านที่ตึงที่สุด: ด้านทุน/NC กับด้าน FX Limit
