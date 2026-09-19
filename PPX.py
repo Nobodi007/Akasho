@@ -23,6 +23,11 @@ MODEL_VERSION / CHANGELOG
 v1.4.0              เพิ่ม Market Overview (รายการโปรด/ปริมาณ/% เพิ่ม/% ลด) ไว้ใน Tab 1
                       + Multi-coin customer wallet (ถือได้หลายเหรียญพร้อมกัน ไม่รีเซ็ตเมื่อเปลี่ยนเหรียญ)
                       + ถอด Navbar ด้านล่างออกตาม request
+v1.4.1              แก้บั๊ก: มูลค่าเหรียญอื่นในกระเป๋าลูกค้าคำนวณผิดเมื่อ yfinance
+                      ไม่มีคู่ -THB (fallback ไป -USD แต่ลืมคูณเรท USD/THB) ทำให้
+                      มูลค่ารวมกระเป๋าเปลี่ยนไม่สมเหตุสมผลเวลาสลับเหรียญใน sidebar
+                      + โลโก้เหรียญ: แสดงเฉพาะเหรียญที่ยืนยันว่ามีไอคอนจริง
+                      เหรียญอื่นใช้ตัวอักษรย่อแทนทันที (ไม่พึ่ง onerror ของ <img>)
 """
 
 from __future__ import annotations
@@ -42,7 +47,7 @@ from typing import Any, Mapping, Optional
 import numpy as np
 import pandas as pd
 
-MODEL_VERSION = "1.4.0"
+MODEL_VERSION = "1.4.1"
 
 try:
     import yaml
@@ -99,6 +104,15 @@ SUPPORTED_ASSETS = [
     "ASTER", "LIT", "ZIG", "PEPE", "VVV", "ZAMA", "STRK",
 ]
 STABLECOINS = ["USDT", "USDC"]
+
+# เหรียญที่ยืนยันแล้วว่ามีไอคอนจริงใน cryptocurrency-icons CDN (atomiclabs@1.0.2)
+# เหรียญนอกลิสต์นี้ (โดยเฉพาะโทเคนใหม่ๆ อย่าง ASTER/LIT/ZIG/VVV/ZAMA/STRK) มักไม่มี
+# ไฟล์ไอคอนอยู่จริงใน CDN นี้ — แทนที่จะยิง <img> แล้วหวังพึ่ง onerror (ซึ่งอาจไม่ทำงาน
+# ถ้า browser/streamlit sandbox บล็อก inline event handler) เราเช็ค whitelist นี้ก่อน
+# แล้วแสดงตัวอักษรย่อแทนไปเลยสำหรับเหรียญที่ไม่อยู่ใน whitelist
+ICON_SUPPORTED_ASSETS = {
+    "BTC", "ETH", "SOL", "DOGE", "ADA", "HBAR", "LINK", "XLM", "XRP", "USDT", "USDC",
+}
 
 LOCAL_TRADING_FEE_PCT = 0.0025
 MIN_TRADE_THB = 50.0
@@ -1052,12 +1066,14 @@ def fetch_price_data(ticker: str, start: Any, end: Any,
 def fetch_market_overview(tickers: list[str], favorites: list[str] = None) -> pd.DataFrame:
     favorites = favorites or []
     rows = []
+    usdthb_rate: Optional[float] = None
     for t in tickers:
         try:
             data = yf.download(f"{t}-THB", period="2d", interval="1h", progress=False)
-            if data.empty:
+            is_thb_pair = data is not None and not data.empty
+            if not is_thb_pair:
                 data = yf.download(f"{t}-USD", period="2d", interval="1h", progress=False)
-            if data.empty:
+            if data is None or data.empty:
                 continue
             if isinstance(data.columns, pd.MultiIndex):
                 data.columns = data.columns.get_level_values(0)
@@ -1065,6 +1081,16 @@ def fetch_market_overview(tickers: list[str], favorites: list[str] = None) -> pd
             prev_price = float(data["Close"].iloc[0])
             pct_change = (last_price - prev_price) / prev_price * 100 if prev_price else 0
             volume_24h = float(data["Volume"].tail(24).sum())
+
+            if not is_thb_pair:
+                # ticker นี้ไม่มีคู่เทรด -THB บน yfinance จึงต้อง fallback ไปที่ -USD
+                # แต่ last_price/prev_price ที่ได้เป็นหน่วย USD — ถ้าไม่คูณเรท USD/THB
+                # ก่อนเก็บลง "price" มูลค่าเหรียญนี้เวลาเอาไปคำนวณพอร์ตรวม (THB)
+                # จะต่ำกว่าความจริงราว 30+ เท่า (เท่ากับเรท USD/THB)
+                if usdthb_rate is None:
+                    usdthb_rate, _ = get_reference_usdthb()
+                last_price *= usdthb_rate
+
             rows.append({
                 "symbol": t,
                 "price": last_price,
@@ -2660,6 +2686,13 @@ def render_tab3(cfg: dict[str, Any], data: pd.DataFrame, data_err: Optional[str]
         coins_book = sim.get("customer_coins", {})
         mid_now = coin_price_thb_now * (1 + cfg["local_premium"])
 
+        # มูลค่ารวมของกระเป๋าต้องคำนวณจาก "ทุกเหรียญที่ลูกค้าถือ" ด้วยฐานราคาที่
+        # สอดคล้องกัน: เหรียญที่กำลังเลือกอยู่ใน Time-Travel ใช้ราคาจำลอง ณ วันนั้น
+        # (mid_now) ส่วนเหรียญอื่นใช้ราคาตลาดสดล่าสุดจาก price_lookup (เป็นหน่วย
+        # THB เสมอ — ดู fetch_market_overview ที่แปลง USD→THB ให้แล้ว) การสลับเหรียญ
+        # ใน sidebar จะไม่เปลี่ยนจำนวนเหรียญที่ถือ แต่ "มูลค่ารวม" อาจขยับได้เล็กน้อย
+        # ตามราคาตลาดสดที่รีเฟรชทุก 60 วินาที ซึ่งเป็นพฤติกรรมที่ถูกต้อง
+        # (ไม่ใช่บั๊ก) ตราบใดที่ตัวเลขต่อเหรียญยังสมเหตุสมผล
         wallet_price = dict(price_lookup or {})
         wallet_price[asset] = mid_now
 
@@ -2668,26 +2701,8 @@ def render_tab3(cfg: dict[str, Any], data: pd.DataFrame, data_err: Optional[str]
 
         update_time = pd.Timestamp.now().strftime("%H:%M:%S")
 
-        coin_rows_html = "".join(f'''
-<div style="display:flex;justify-content:space-between;align-items:center;padding:16px 0;border-bottom:1px solid #1f2937;">
-<div style="display:flex;align-items:center;gap:12px;">
-<div style="position:relative;width:32px;height:32px;">
-<img src="https://cdn.jsdelivr.net/gh/atomiclabs/cryptocurrency-icons@1.0.2/128/color/{sym.lower()}.png"
-     onerror="this.style.display='none';this.nextElementSibling.style.display='flex';"
-     style="width:32px;height:32px;border-radius:50%;display:block;background:#1a1f24;">
-<div style="display:none;position:absolute;top:0;left:0;background:#2563EB;border-radius:50%;width:32px;height:32px;align-items:center;justify-content:center;color:white;font-weight:bold;font-size:1rem;">{sym[0]}</div>
-</div>
-<div>
-<div style="color:white;font-weight:bold;font-size:1.1rem;">{sym}</div>
-<div style="color:#6B7280;font-size:0.85rem;margin-top:2px;">จำนวนที่ใช้ได้</div>
-</div>
-</div>
-<div style="text-align:right;">
-<div style="color:white;font-weight:bold;font-size:1.1rem;">{fmt_coin(qty, "").strip()} <span style="color:#6B7280;">&gt;</span></div>
-<div style="color:#6B7280;font-size:0.85rem;margin-top:2px;">{fmt_num(qty * wallet_price.get(sym, 0.0))} THB</div>
-</div>
-</div>
-''' for sym, qty in sorted(coins_book.items(), key=lambda kv: -kv[1] * wallet_price.get(kv[0], 0.0)) if qty > 0)
+        coin_rows_html = "".join(_wallet_coin_row_html(sym, qty, wallet_price)
+            for sym, qty in sorted(coins_book.items(), key=lambda kv: -kv[1] * wallet_price.get(kv[0], 0.0)) if qty > 0)
 
         if not coin_rows_html:
             coin_rows_html = ('<div style="padding:16px 0;color:#6B7280;'
@@ -2969,7 +2984,50 @@ def render_tab3(cfg: dict[str, Any], data: pd.DataFrame, data_err: Optional[str]
 - CEX liquidity ฝั่ง Customer ใช้ค่า **CEX Margin เดิม (`{fmt_baht(cfg["cex_margin_thb"])}`)** เป็น proxy
 - **v1.4.0:** กระเป๋าเงินลูกค้าถือได้ **หลายเหรียญพร้อมกัน** (`customer_coins` เป็น dict);
   เหรียญที่ไม่ได้เลือกเทรดอยู่ตอนนี้ตีมูลค่าด้วยราคาตลาดสดจาก Market Overview แทน time-travel price
+- **v1.4.1:** แก้บั๊ก fallback ราคา -USD ที่ไม่ถูกแปลงเป็น THB ก่อนใช้คิดมูลค่ากระเป๋า
+  (เคยทำให้มูลค่าเหรียญที่ไม่มีคู่เทรด -THB ต่ำผิดปกติ ~เท่ากับหารด้วยเรท USD/THB)
         """)
+
+
+def _wallet_coin_row_html(sym: str, qty: float, wallet_price: Mapping[str, float]) -> str:
+    """สร้างแถวแสดงเหรียญในกระเป๋าจำลอง — ใช้โลโก้จริงเฉพาะเหรียญที่ยืนยันแล้วว่ามี
+    ไอคอนอยู่จริงใน CDN (ICON_SUPPORTED_ASSETS) เหรียญอื่นแสดงตัวอักษรย่อทันที
+    แทนที่จะยิง <img> แล้วหวังพึ่ง onerror ของ browser ซึ่งไม่แน่นอน
+    """
+    price = wallet_price.get(sym, 0.0)
+    if sym in ICON_SUPPORTED_ASSETS:
+        icon_html = (
+            f'<img src="https://cdn.jsdelivr.net/gh/atomiclabs/'
+            f'cryptocurrency-icons@1.0.2/128/color/{sym.lower()}.png" '
+            'onerror="this.style.display=\'none\';this.nextElementSibling.style.display=\'flex\';" '
+            'style="width:32px;height:32px;border-radius:50%;display:block;background:#1a1f24;">'
+            '<div style="display:none;position:absolute;top:0;left:0;background:#2563EB;'
+            'border-radius:50%;width:32px;height:32px;align-items:center;justify-content:center;'
+            f'color:white;font-weight:bold;font-size:1rem;">{sym[0]}</div>'
+        )
+    else:
+        icon_html = (
+            '<div style="background:#2563EB;border-radius:50%;width:32px;height:32px;'
+            'display:flex;align-items:center;justify-content:center;color:white;'
+            f'font-weight:bold;font-size:1rem;">{sym[0]}</div>'
+        )
+    return f'''
+<div style="display:flex;justify-content:space-between;align-items:center;padding:16px 0;border-bottom:1px solid #1f2937;">
+<div style="display:flex;align-items:center;gap:12px;">
+<div style="position:relative;width:32px;height:32px;">
+{icon_html}
+</div>
+<div>
+<div style="color:white;font-weight:bold;font-size:1.1rem;">{sym}</div>
+<div style="color:#6B7280;font-size:0.85rem;margin-top:2px;">จำนวนที่ใช้ได้</div>
+</div>
+</div>
+<div style="text-align:right;">
+<div style="color:white;font-weight:bold;font-size:1.1rem;">{fmt_coin(qty, "").strip()} <span style="color:#6B7280;">&gt;</span></div>
+<div style="color:#6B7280;font-size:0.85rem;margin-top:2px;">{fmt_num(qty * price)} THB</div>
+</div>
+</div>
+'''
 
 
 def main() -> None:
