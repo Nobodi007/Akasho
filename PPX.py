@@ -2806,82 +2806,66 @@ def render_tab3(cfg: dict[str, Any], data: pd.DataFrame, data_err: Optional[str]
         # ดึงเวลาปัจจุบันมาจำลองเป็นเวลาอัปเดต
         update_time = pd.Timestamp.now().strftime("%H:%M:%S")
 
-        st.markdown(
-            f"""
-            <div style="background: #111518; border-radius: 16px; overflow: hidden; margin-bottom: 20px; border: 1px solid #1f2937; font-family: sans-serif;">
-                <!-- ส่วนหัวสีเขียว -->
-                <div style="background: linear-gradient(180deg, #206c45 0%, #173d2a 100%); padding: 20px 20px 40px 20px; position: relative;">
-                    <div style="display: flex; justify-content: space-between; align-items: center; color: white;">
-                        <span style="font-size: 1.3rem; font-weight: bold;">กระเป๋าเงิน (Simulated)</span>
-                        <span style="font-size: 1.2rem;">ⓘ 🕒</span>
-                    </div>
-                </div>
-                
-                <!-- การ์ดมูลค่ารวม (ซ้อนทับส่วนสีเขียว) -->
-                <div style="margin: -30px 20px 20px 20px; background: #1c2127; border-radius: 12px; padding: 24px 20px; text-align: center; position: relative; box-shadow: 0 4px 12px rgba(0,0,0,0.5);">
-                    <div style="color: #9CA3AF; font-size: 0.9rem; margin-bottom: 8px;">มูลค่าทั้งหมด</div>
-                    <div style="color: #00D26A; font-size: 2.2rem; font-weight: bold;">{fmt_num(port_val_thb)} THB</div>
-                    <div style="color: #9CA3AF; font-size: 0.9rem; margin-top: 4px;">(≈ {fmt_num(port_val_usdt)} USDT)</div>
-                    <div style="color: #6B7280; font-size: 0.8rem; margin-top: 16px;">↻ อัปเดตล่าสุด: {update_time}</div>
-                </div>
+        html_ui = f"""<div style="background:#111518;border-radius:16px;overflow:hidden;margin-bottom:20px;border:1px solid #1f2937;font-family:sans-serif;">
+<div style="background:linear-gradient(180deg,#206c45 0%,#173d2a 100%);padding:20px 20px 40px 20px;position:relative;">
+<div style="display:flex;justify-content:space-between;align-items:center;color:white;">
+<span style="font-size:1.3rem;font-weight:bold;">กระเป๋าเงิน (Simulated)</span>
+<span style="font-size:1.2rem;">ⓘ 🕒</span>
+</div>
+</div>
+<div style="margin:-30px 20px 20px 20px;background:#1c2127;border-radius:12px;padding:24px 20px;text-align:center;position:relative;box-shadow:0 4px 12px rgba(0,0,0,0.5);">
+<div style="color:#9CA3AF;font-size:0.9rem;margin-bottom:8px;">มูลค่าทั้งหมด</div>
+<div style="color:#00D26A;font-size:2.2rem;font-weight:bold;">{fmt_num(port_val_thb)} THB</div>
+<div style="color:#9CA3AF;font-size:0.9rem;margin-top:4px;">(≈ {fmt_num(port_val_usdt)} USDT)</div>
+<div style="color:#6B7280;font-size:0.8rem;margin-top:16px;">↻ อัปเดตล่าสุด: {update_time}</div>
+</div>
+<div style="padding:0 20px;">
+<div style="display:flex;gap:12px;margin-bottom:24px;">
+<div style="flex:1;background:#43c863;color:white;text-align:center;padding:12px;border-radius:8px;font-weight:bold;font-size:1rem;cursor:pointer;">ฝาก</div>
+<div style="flex:1;background:transparent;border:1px solid #374151;color:white;text-align:center;padding:12px;border-radius:8px;font-weight:bold;font-size:1rem;cursor:pointer;">ถอน</div>
+</div>
+<div style="display:flex;align-items:center;gap:10px;margin-bottom:16px;">
+<div style="width:18px;height:18px;border:2px solid #374151;border-radius:4px;"></div>
+<span style="color:#9CA3AF;font-size:0.9rem;">ซ่อนเหรียญที่มูลค่า &lt; 1 บาท</span>
+</div>
+<div style="background:#1a1f24;border-radius:8px;padding:12px 16px;color:#6B7280;font-size:0.95rem;margin-bottom:24px;border:1px solid #2d333b;">🔍 ค้นหาสินทรัพย์</div>
+<div style="display:flex;justify-content:space-between;align-items:center;padding:16px 0;border-bottom:1px solid #1f2937;">
+<div style="display:flex;align-items:center;gap:12px;">
+<div style="background:#43c863;border-radius:50%;width:32px;height:32px;display:flex;align-items:center;justify-content:center;color:white;font-weight:bold;font-size:1rem;">฿</div>
+<div>
+<div style="color:white;font-weight:bold;font-size:1.1rem;">THB</div>
+<div style="color:#6B7280;font-size:0.85rem;margin-top:2px;">จำนวนที่ใช้ได้</div>
+</div>
+</div>
+<div style="text-align:right;">
+<div style="color:white;font-weight:bold;font-size:1.1rem;">0.00 <span style="color:#6B7280;">&gt;</span></div>
+<div style="color:#6B7280;font-size:0.85rem;margin-top:2px;">0 THB</div>
+</div>
+</div>
+<div style="display:flex;justify-content:space-between;align-items:center;padding:16px 0;margin-bottom:10px;">
+<div style="display:flex;align-items:center;gap:12px;">
+<div style="background:#2563EB;border-radius:50%;width:32px;height:32px;display:flex;align-items:center;justify-content:center;color:white;font-weight:bold;font-size:1rem;">{asset[0]}</div>
+<div>
+<div style="color:white;font-weight:bold;font-size:1.1rem;">{asset}</div>
+<div style="color:#6B7280;font-size:0.85rem;margin-top:2px;">จำนวนที่ใช้ได้</div>
+</div>
+</div>
+<div style="text-align:right;">
+<div style="color:white;font-weight:bold;font-size:1.1rem;">{fmt_coin(customer_coins, "").strip()} <span style="color:#6B7280;">&gt;</span></div>
+<div style="color:#6B7280;font-size:0.85rem;margin-top:2px;">{fmt_num(port_val_thb)} THB</div>
+</div>
+</div>
+</div>
+<div style="display:flex;justify-content:space-between;padding:16px 28px;background:#161b21;border-top:1px solid #1f2937;">
+<div style="text-align:center;color:#6B7280;"><div style="font-size:1.4rem;margin-bottom:4px;">⟠</div><div style="font-size:0.75rem;">หน้าหลัก</div></div>
+<div style="text-align:center;color:#6B7280;"><div style="font-size:1.4rem;margin-bottom:4px;">📈</div><div style="font-size:0.75rem;">ตลาด</div></div>
+<div style="text-align:center;color:#6B7280;"><div style="font-size:1.4rem;margin-bottom:4px;">⇄</div><div style="font-size:0.75rem;">เทรด</div></div>
+<div style="text-align:center;color:#43c863;"><div style="font-size:1.4rem;margin-bottom:4px;">💳</div><div style="font-size:0.75rem;">กระเป๋าเงิน</div></div>
+<div style="text-align:center;color:#6B7280;"><div style="font-size:1.4rem;margin-bottom:4px;">👤</div><div style="font-size:0.75rem;">โปรไฟล์</div></div>
+</div>
+</div>"""
 
-                <!-- ปุ่ม ฝาก / ถอน -->
-                <div style="padding: 0 20px;">
-                    <div style="display: flex; gap: 12px; margin-bottom: 24px;">
-                        <div style="flex: 1; background: #43c863; color: white; text-align: center; padding: 12px; border-radius: 8px; font-weight: bold; font-size: 1rem; cursor: pointer;">ฝาก</div>
-                        <div style="flex: 1; background: transparent; border: 1px solid #374151; color: white; text-align: center; padding: 12px; border-radius: 8px; font-weight: bold; font-size: 1rem; cursor: pointer;">ถอน</div>
-                    </div>
-                    
-                    <!-- Search & Filter -->
-                    <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 16px;">
-                        <div style="width: 18px; height: 18px; border: 2px solid #374151; border-radius: 4px;"></div>
-                        <span style="color: #9CA3AF; font-size: 0.9rem;">ซ่อนเหรียญที่มูลค่า &lt; 1 บาท</span>
-                    </div>
-                    <div style="background: #1a1f24; border-radius: 8px; padding: 12px 16px; color: #6B7280; font-size: 0.95rem; margin-bottom: 24px; border: 1px solid #2d333b;">
-                        🔍 ค้นหาสินทรัพย์
-                    </div>
-                    
-                    <!-- Asset List -->
-                    <div style="display: flex; justify-content: space-between; align-items: center; padding: 16px 0; border-bottom: 1px solid #1f2937;">
-                        <div style="display: flex; align-items: center; gap: 12px;">
-                            <div style="background: #43c863; border-radius: 50%; width: 32px; height: 32px; display: flex; align-items: center; justify-content: center; color: white; font-weight: bold; font-size: 1rem;">฿</div>
-                            <div>
-                                <div style="color: white; font-weight: bold; font-size: 1.1rem;">THB</div>
-                                <div style="color: #6B7280; font-size: 0.85rem; margin-top: 2px;">จำนวนที่ใช้ได้</div>
-                            </div>
-                        </div>
-                        <div style="text-align: right;">
-                            <div style="color: white; font-weight: bold; font-size: 1.1rem;">0.00 <span style="color: #6B7280;">&gt;</span></div>
-                            <div style="color: #6B7280; font-size: 0.85rem; margin-top: 2px;">0 THB</div>
-                        </div>
-                    </div>
-                    
-                    <div style="display: flex; justify-content: space-between; align-items: center; padding: 16px 0; margin-bottom: 10px;">
-                        <div style="display: flex; align-items: center; gap: 12px;">
-                            <div style="background: #2563EB; border-radius: 50%; width: 32px; height: 32px; display: flex; align-items: center; justify-content: center; color: white; font-weight: bold; font-size: 1rem;">{asset[0]}</div>
-                            <div>
-                                <div style="color: white; font-weight: bold; font-size: 1.1rem;">{asset}</div>
-                                <div style="color: #6B7280; font-size: 0.85rem; margin-top: 2px;">จำนวนที่ใช้ได้</div>
-                            </div>
-                        </div>
-                        <div style="text-align: right;">
-                            <div style="color: white; font-weight: bold; font-size: 1.1rem;">{fmt_coin(customer_coins, "").strip()} <span style="color: #6B7280;">&gt;</span></div>
-                            <div style="color: #6B7280; font-size: 0.85rem; margin-top: 2px;">{fmt_num(port_val_thb)} THB</div>
-                        </div>
-                    </div>
-                </div>
-                
-                <!-- Bottom Navigation Menu (Mock) -->
-                <div style="display: flex; justify-content: space-between; padding: 16px 28px; background: #161b21; border-top: 1px solid #1f2937;">
-                    <div style="text-align: center; color: #6B7280;"><div style="font-size: 1.4rem; margin-bottom: 4px;">⟠</div><div style="font-size: 0.75rem;">หน้าหลัก</div></div>
-                    <div style="text-align: center; color: #6B7280;"><div style="font-size: 1.4rem; margin-bottom: 4px;">📈</div><div style="font-size: 0.75rem;">ตลาด</div></div>
-                    <div style="text-align: center; color: #6B7280;"><div style="font-size: 1.4rem; margin-bottom: 4px;">⇄</div><div style="font-size: 0.75rem;">เทรด</div></div>
-                    <div style="text-align: center; color: #43c863;"><div style="font-size: 1.4rem; margin-bottom: 4px;">💳</div><div style="font-size: 0.75rem;">กระเป๋าเงิน</div></div>
-                    <div style="text-align: center; color: #6B7280;"><div style="font-size: 1.4rem; margin-bottom: 4px;">👤</div><div style="font-size: 0.75rem;">โปรไฟล์</div></div>
-                </div>
-            </div>
-            """, unsafe_allow_html=True
-        )
+        st.markdown(html_ui, unsafe_allow_html=True)
         # -------------------------------------------------
 
         with st.container(border=True):
