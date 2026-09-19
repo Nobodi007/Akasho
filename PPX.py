@@ -10,7 +10,7 @@ LAYERS
   2. DATA LAYER             yfinance / cache / CSV export
   3. UI THEME & COMPONENTS  CSS, metric card, timeline, gauge, TradingView
   4. AUDIT TRAIL            log การเปลี่ยนพารามิเตอร์
-  5. APP                    sidebar + 3 tabs (อยู่ใน main() ทั้งหมด)
+  5. APP                    sidebar + 4 tabs (อยู่ใน main() ทั้งหมด)
 
 TESTABILITY
 -----------
@@ -1096,11 +1096,7 @@ def execute_order(
 # =========================================================================
 
 def _cache_data(*dargs, **dkwargs):
-    """st.cache_data shim — ทำงานเป็น no-op เมื่อไม่มี streamlit
-
-    ทำให้ฟังก์ชัน data layerอยู่ระดับ module ได้ทั้งหมด ไม่ต้องห่อด้วย
-    `if HAS_UI:` ซึ่งเคยเป็นต้นเหตุของบั๊กย่อหน้า
-    """
+    """st.cache_data shim — ทำงานเป็น no-op เมื่อไม่มี streamlit"""
     def decorator(fn):
         if HAS_UI:
             return st.cache_data(*dargs, **dkwargs)(fn)
@@ -1125,11 +1121,7 @@ def _normalize_index(d: pd.DataFrame) -> pd.DataFrame:
 
 @_cache_data(ttl=3600, show_spinner=False)
 def fetch_fx_proxy_series(start: Any, end: Any) -> tuple[Optional[pd.Series], Optional[str]]:
-    """ดึงราคาปิดรายวันของ FX proxy (เช่น USDT/THB) จาก endpoint ใน config
-
-    คืน (series, None) เมื่อสำเร็จ หรือ (None, ข้อความ error) — ไม่ raise
-    เพื่อให้ผู้เรียกถอยกลับไปใช้เรทค้างได้ พร้อมแสดงสถานะให้ผู้ใช้เห็น
-    """
+    """ดึงราคาปิดรายวันของ FX proxy (เช่น USDT/THB) จาก endpoint ใน config"""
     if not (FX_PROXY["enabled"] and FX_PROXY["url"]):
         return None, "FX proxy ไม่ได้เปิดใช้ใน config"
     try:
@@ -1185,6 +1177,39 @@ def fetch_price_data(ticker: str, start: Any, end: Any,
 
     df["Volatility_Pct"] = (df["Day_High"] - df["Day_Low"]) / df["Global_USD"]
     return df, None
+
+
+@_cache_data(ttl=60, show_spinner=False)
+def fetch_market_overview(tickers: list[str], favorites: list[str] = None) -> pd.DataFrame:
+    """
+    ดึงราคาล่าสุด, ปริมาณ 24 ชม., และ % เปลี่ยนแปลง
+    ใช้ ticker list เดิมที่มีอยู่แล้วในระบบ (asset universe เดียวกับ fetch_price_data)
+    """
+    favorites = favorites or []
+    rows = []
+    for t in tickers:
+        try:
+            data = yf.download(f"{t}-THB", period="2d", interval="1h", progress=False)
+            if data.empty:
+                data = yf.download(f"{t}-USD", period="2d", interval="1h", progress=False)
+            if data.empty:
+                continue
+            if isinstance(data.columns, pd.MultiIndex):
+                data.columns = data.columns.get_level_values(0)
+            last_price = float(data["Close"].iloc[-1])
+            prev_price = float(data["Close"].iloc[0])
+            pct_change = (last_price - prev_price) / prev_price * 100 if prev_price else 0
+            volume_24h = float(data["Volume"].tail(24).sum())
+            rows.append({
+                "symbol": t,
+                "price": last_price,
+                "pct_change": pct_change,
+                "volume": volume_24h,
+                "is_favorite": t in favorites,
+            })
+        except Exception:
+            continue
+    return pd.DataFrame(rows)
 
 
 @_cache_data(ttl=900, show_spinner=False)
@@ -1543,6 +1568,31 @@ def render_tradingview(symbol, container_id, height=500, interval="D", studies=N
       }})();
     </script>"""
     components.html(html, height=height + 8)
+
+
+def render_market_table(df: pd.DataFrame, mode: str):
+    """เรนเดอร์ตารางสรุปราคาตลาดรายเหรียญ"""
+    if df.empty:
+        st.info("ไม่มีข้อมูลตลาดในขณะนี้")
+        return
+
+    if mode == "favorite":
+        view = df[df["is_favorite"]].sort_values("volume", ascending=False)
+    elif mode == "volume":
+        view = df.sort_values("volume", ascending=False)
+    elif mode == "top_gain":
+        view = df.sort_values("pct_change", ascending=False)
+    elif mode == "top_loss":
+        view = df.sort_values("pct_change", ascending=True)
+    else:
+        view = df
+
+    for _, row in view.head(15).iterrows():
+        color = "#00D26A" if row["pct_change"] >= 0 else "#FF4B4B"
+        c1, c2, c3 = st.columns([2, 2, 2])
+        c1.markdown(f"**{row['symbol']}**")
+        c2.markdown(f"{row['price']:,.4f}")
+        c3.markdown(f"<span style='color:{color}'>{row['pct_change']:+.2f}%</span> · {row['volume']:,.0f}", unsafe_allow_html=True)
 
 
 @_fragment
@@ -2796,14 +2846,13 @@ def render_tab3(cfg: dict[str, Any], data: pd.DataFrame, data_err: Optional[str]
 
     with left:
         section("🧑‍💻 หน้าจอลูกค้า")
-        
-        # --- UI แสดงพอร์ตโฟลิโอของลูกค้าแบบ Bitkub ---
+
+        # --- UI แสดงพอร์ตโฟลิโอของลูกค้าแบบ Bitkub (แก้ไขแล้ว ไร้ช่องว่างกวนใจ Streamlit) ---
         customer_coins = sim.get("customer_coins", 0.0)
         mid_now = coin_price_thb_now * (1 + cfg["local_premium"])
         port_val_thb = customer_coins * mid_now
         port_val_usdt = customer_coins * spot_usd_current
-        
-        # ดึงเวลาปัจจุบันมาจำลองเป็นเวลาอัปเดต
+
         update_time = pd.Timestamp.now().strftime("%H:%M:%S")
 
         html_ui = f"""<div style="background:#111518;border-radius:16px;overflow:hidden;margin-bottom:20px;border:1px solid #1f2937;font-family:sans-serif;">
@@ -2866,7 +2915,6 @@ def render_tab3(cfg: dict[str, Any], data: pd.DataFrame, data_err: Optional[str]
 </div>"""
 
         st.markdown(html_ui, unsafe_allow_html=True)
-        # -------------------------------------------------
 
         with st.container(border=True):
             order_side = st.radio("ฝั่ง", ["ซื้อ", "ขาย"], horizontal=True,
@@ -3125,10 +3173,11 @@ def main() -> None:
                                           cfg["end_date"],
                                           use_fx_proxy=cfg["use_fx_proxy"])
 
-    tab1, tab2, tab3 = st.tabs([
+    tab1, tab2, tab3, tab4 = st.tabs([
         "📊 5-Year Backtest Simulator",
         "🧮 Liquidity & Capital Planner",
         "🛒 Time-Travel Order Simulator",
+        "🌐 Market Overview",
     ])
 
     with tab1:
@@ -3137,6 +3186,20 @@ def main() -> None:
         render_tab2(cfg, data, data_err)
     with tab3:
         render_tab3(cfg, data, data_err)
+    with tab4:
+        st.subheader("📊 Market Overview")
+        favorites = st.session_state.get("favorite_tickers", [])
+        market_df = fetch_market_overview(SUPPORTED_ASSETS, favorites)
+
+        sub1, sub2, sub3, sub4 = st.tabs(["⭐ รายการโปรด", "ปริมาณ 24 ชม.", "% เพิ่มสูงสุด", "% ลดสูงสุด"])
+        with sub1:
+            render_market_table(market_df, "favorite")
+        with sub2:
+            render_market_table(market_df, "volume")
+        with sub3:
+            render_market_table(market_df, "top_gain")
+        with sub4:
+            render_market_table(market_df, "top_loss")
 
     st.markdown(
         f"<div class='xs-foot'>XSpring Dealer Suite · Model v{MODEL_VERSION} · "
