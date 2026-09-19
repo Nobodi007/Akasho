@@ -10,7 +10,7 @@ LAYERS
   2. DATA LAYER             yfinance / cache / CSV export
   3. UI THEME & COMPONENTS  CSS, metric card, timeline, gauge, TradingView
   4. AUDIT TRAIL            log การเปลี่ยนพารามิเตอร์
-  5. APP                    sidebar + 3 tabs (อยู่ใน main() ทั้งหมด)
+  5. APP                    sidebar + 4 tabs (อยู่ใน main() ทั้งหมด)
 
 TESTABILITY
 -----------
@@ -21,8 +21,8 @@ UI ถูกเรียกใต้ `if __name__ == "__main__"` เท่าน
 MODEL_VERSION / CHANGELOG
 -------------------------
 v1.4.0              เพิ่ม Market Overview (รายการโปรด/ปริมาณ/% เพิ่ม/% ลด) ไว้ใน Tab 1
-                      + Multi-coin customer wallet (ถือได้หลายเหรียญพร้อมกัน)
-                      + ขยาย SUPPORTED_ASSETS ให้ครอบคลุมเหรียญยอดนิยมเพิ่มเติม
+                      + Multi-coin customer wallet (ถือได้หลายเหรียญพร้อมกัน ไม่รีเซ็ตเมื่อเปลี่ยนเหรียญ)
+                      + ถอด Navbar ด้านล่างออกตาม request
 """
 
 from __future__ import annotations
@@ -125,7 +125,6 @@ HOT_WALLET_CAP = 0.50
 HOT_WALLET_CAP_LIAB_THRESHOLD = 1_000_000_000
 
 FALLBACK_USDTHB = 35.5
-
 MIN_RISK_SAMPLE_DAYS = 30
 RISK_SAMPLE_WARN_DAYS = 180
 
@@ -492,7 +491,7 @@ def sim_defaults(asset_name: str, start_date_val: Any, spot_usd: float,
     coin_price = spot_usd * usdthb
     return {
         "asset": asset_name,
-        "inv_coins": (target_stock_thb / coin_price) if coin_price > 0 else 0.0,
+        "inv_coins": {asset_name: (target_stock_thb / coin_price) if coin_price > 0 else 0.0},
         "target_thb": target_stock_thb,
         "fx_used_usd": 0.0,
         "cex_used_thb": 0.0,
@@ -506,10 +505,11 @@ def sim_defaults(asset_name: str, start_date_val: Any, spot_usd: float,
 
 def sim_config_signature(ctx: Mapping[str, Any], target_stock_thb: float,
                          start_date: Any, end_date: Any) -> tuple:
+    # ถอด "asset" ออกจาก signature ทำให้เวลาเปลี่ยนเหรียญใน sidebar ระบบไม่รีเซ็ตข้อมูล
     keys = [
-        "asset", "local_premium", "spread", "hedge_fee",
+        "local_premium", "spread", "hedge_fee",
         "fx_limit", "slip_sens", "include_fee_rev",
-        "wd_markup", "wd_fee_per_coin", "bank_type", "ktb_wd_fee", "ktb_fx_bps",
+        "wd_markup", "bank_type", "ktb_wd_fee", "ktb_fx_bps",
         "capital", "cex_margin", "cex_liquidity_thb", "liab", "h_crypto", "h_cex",
         "fixed_min_nc", "trading_risk_rate", "daily_volume_thb", "custody_rate",
         "hot_breach", "market_depth_usd", "impact_penalty",
@@ -543,6 +543,14 @@ def sim_normalize_state(sim: Any, asset: str, start_date_val: Any,
     sim.setdefault("current_date", start_date_val)
     sim.setdefault("customer_coins", {})
 
+    sim.setdefault("inv_coins", {})
+    if not isinstance(sim["inv_coins"], dict):
+        sim["inv_coins"] = {sim.get("asset", asset): float(sim["inv_coins"])}
+
+    coin_price = spot_usd * usdthb
+    if asset not in sim["inv_coins"]:
+        sim["inv_coins"][asset] = target_stock_thb / coin_price if coin_price > 0 else 0.0
+
     if not isinstance(sim["customer_coins"], dict):
         sim["customer_coins"] = {}
     clean_coins: dict[str, float] = {}
@@ -563,14 +571,6 @@ def sim_normalize_state(sim: Any, asset: str, start_date_val: Any,
         except (TypeError, ValueError):
             sim[key] = 0.0
 
-    try:
-        sim["inv_coins"] = float(sim.get("inv_coins", 0.0))
-        if not np.isfinite(sim["inv_coins"]):
-            raise ValueError
-    except (TypeError, ValueError):
-        coin_price = spot_usd * usdthb
-        sim["inv_coins"] = target_stock_thb / coin_price if coin_price > 0 else 0.0
-
     sim["asset"] = asset
     sim["target_thb"] = float(target_stock_thb)
     return sim
@@ -582,6 +582,7 @@ def execute_order(
 ) -> tuple[list[dict[str, Any]], Optional[dict[str, Any]]]:
     p = ctx
     side = "buy" if side == "buy" else "sell"
+    current_asset = sim["asset"]
 
     try:
         amount_thb = float(amount_thb)
@@ -633,7 +634,7 @@ def execute_order(
                           note="จำนวนเหรียญที่คำนวณได้ไม่เป็นบวก"))
         return steps, None
 
-    inv_before = float(sim["inv_coins"])
+    inv_before = float(sim["inv_coins"].get(current_asset, 0.0))
     target_coins = (float(sim["target_thb"]) / coin_price_global
                     if coin_price_global > 0 else 0.0)
     inv_after_customer = inv_before - coins if side == "buy" else inv_before + coins
@@ -656,18 +657,18 @@ def execute_order(
                     ("มูลค่าคำสั่ง", fmt_baht(amount_thb)),
                     (f"ค่าธรรมเนียมซื้อขาย {LOCAL_TRADING_FEE_PCT * 100:.2f}%",
                      "- " + fmt_baht(trading_fee)),
-                    ("เหรียญที่ต้องส่งมอบ", fmt_coin(coins, sim["asset"])),
-                    ("สต็อกก่อน", fmt_coin(inv_before, sim["asset"])),
+                    ("เหรียญที่ต้องส่งมอบ", fmt_coin(coins, current_asset)),
+                    ("สต็อกก่อน", fmt_coin(inv_before, current_asset)),
                     ("FX quota เหลือ", f"$ {fx_left_usd:,.0f}"),
                     ("สูงสุดที่ hedge ได้ด้วย FX",
-                     fmt_coin(feasible_hedge_coins, sim["asset"])),
+                     fmt_coin(feasible_hedge_coins, current_asset)),
                 ],
                 total=("สถานะ", "Reject — Inventory/FX ไม่พอ"),
             ))
             record = {
                 "วันที่": order_date.strftime("%Y-%m-%d"),
                 "ฝั่ง": "ซื้อ",
-                "เหรียญ": sim["asset"],
+                "เหรียญ": current_asset,
                 "มูลค่า (บาท)": amount_thb,
                 "ราคาที่ลูกค้าได้": quote,
                 "เหรียญที่ส่งมอบ": 0.0,
@@ -698,12 +699,12 @@ def execute_order(
             ("ฐาน settlementหลังค่าธรรมเนียม", fmt_baht(settlement_thb)),
         ],
         total=("เหรียญที่ลูกค้าได้" if side == "buy" else "เหรียญที่ลูกค้าส่งมอบ",
-               fmt_coin(coins, sim["asset"])),
+               fmt_coin(coins, current_asset)),
     ))
 
-    sim["inv_coins"] = inv_after_customer
-    short_coins = max(0.0, target_coins - sim["inv_coins"])
-    excess_coins = max(0.0, sim["inv_coins"] - target_coins)
+    sim["inv_coins"][current_asset] = inv_after_customer
+    short_coins = max(0.0, target_coins - sim["inv_coins"][current_asset])
+    excess_coins = max(0.0, sim["inv_coins"][current_asset] - target_coins)
 
     steps.append(dict(
         n=3, t="ตัด/รับสต็อก",
@@ -711,16 +712,16 @@ def execute_order(
         note=("Buy ลด inventory ก่อน แล้วค่อยเติมกลับด้วย hedge" if side == "buy"
               else "Sell เพิ่ม inventory ก่อน แล้วค่อยขายส่วนเกินบน CEX"),
         rows=[
-            ("สต็อกก่อนออเดอร์", fmt_coin(inv_before, sim["asset"])),
+            ("สต็อกก่อนออเดอร์", fmt_coin(inv_before, current_asset)),
             ("การเปลี่ยนแปลง",
-             ("- " if side == "buy" else "+ ") + fmt_coin(coins, sim["asset"])),
-            ("สต็อกหลังรับ/ส่งมอบ", fmt_coin(sim["inv_coins"], sim["asset"])),
-            ("Target Stock", fmt_coin(target_coins, sim["asset"])),
+             ("- " if side == "buy" else "+ ") + fmt_coin(coins, current_asset)),
+            ("สต็อกหลังรับ/ส่งมอบ", fmt_coin(sim["inv_coins"][current_asset], current_asset)),
+            ("Target Stock", fmt_coin(target_coins, current_asset)),
             ("Short / Excess",
-             fmt_coin(short_coins if side == "buy" else excess_coins, sim["asset"])),
+             fmt_coin(short_coins if side == "buy" else excess_coins, current_asset)),
         ],
         total=("มูลค่าสต็อกปัจจุบัน",
-               fmt_baht(max(0.0, sim["inv_coins"]) * coin_price_global)),
+               fmt_baht(max(0.0, sim["inv_coins"][current_asset]) * coin_price_global)),
     ))
 
     hedge_required_coins = short_coins if side == "buy" else excess_coins
@@ -739,7 +740,7 @@ def execute_order(
         hedge_usd = hedged_coins * spot * (1 + p["hedge_fee"])
         sim["fx_used_usd"] += hedge_usd
         if hedge_required_coins > 0:
-            sim["inv_coins"] += hedged_coins
+            sim["inv_coins"][current_asset] += hedged_coins
         sim["unhedged_thb"] += residual_unhedged_coins * coin_price_global
 
         fx_status = "pass" if residual_unhedged_coins <= 1e-12 else "warn"
@@ -763,7 +764,7 @@ def execute_order(
         hedge_usd = hedged_coins * spot * (1 + p["hedge_fee"])
         cex_used_thb_this_order = hedge_thb
         sim["cex_used_thb"] += cex_used_thb_this_order
-        sim["inv_coins"] -= hedged_coins
+        sim["inv_coins"][current_asset] -= hedged_coins
         sim["unhedged_thb"] += residual_unhedged_coins * coin_price_global
 
         fx_status = "pass"
@@ -778,10 +779,10 @@ def execute_order(
     steps.append(dict(
         n=4, t="ระบบตัดสินใจ Hedge อัตโนมัติ", s=hedge_status, note=hedge_note,
         rows=[
-            ("ปริมาณที่ต้อง hedge", fmt_coin(hedge_required_coins, sim["asset"])),
-            ("Hedge สำเร็จ", fmt_coin(hedged_coins, sim["asset"])),
+            ("ปริมาณที่ต้อง hedge", fmt_coin(hedge_required_coins, current_asset)),
+            ("Hedge สำเร็จ", fmt_coin(hedged_coins, current_asset)),
             ("มูลค่า hedge", fmt_baht(hedge_thb)),
-            ("Residual Unhedged", fmt_coin(residual_unhedged_coins, sim["asset"])),
+            ("Residual Unhedged", fmt_coin(residual_unhedged_coins, current_asset)),
             ("Direction", "Buy บน CEX" if side == "buy" else "Sell บน CEX"),
         ],
         total=("สถานะ",
@@ -825,7 +826,7 @@ def execute_order(
             total=("ส่วนที่ยัง Unhedged", fmt_baht(unhedged_thb_this_order)),
         ))
 
-    stock_thb = max(0.0, sim["inv_coins"]) * coin_price_global
+    stock_thb = max(0.0, sim["inv_coins"][current_asset]) * coin_price_global
     nc = nc_snapshot(
         stock_thb, p["capital"], p["cex_margin"], p["liab"],
         p["h_crypto"], p["h_cex"], p["fixed_min_nc"],
@@ -929,16 +930,15 @@ def execute_order(
         gate_result = "NC ไม่พอ"
 
     coins_book = sim.setdefault("customer_coins", {})
-    held_asset = sim["asset"]
     if side == "buy":
-        coins_book[held_asset] = coins_book.get(held_asset, 0.0) + coins
+        coins_book[current_asset] = coins_book.get(current_asset, 0.0) + coins
     else:
-        coins_book[held_asset] = max(0.0, coins_book.get(held_asset, 0.0) - coins)
+        coins_book[current_asset] = max(0.0, coins_book.get(current_asset, 0.0) - coins)
 
     record = {
         "วันที่": order_date.strftime("%Y-%m-%d"),
         "ฝั่ง": "ซื้อ" if side == "buy" else "ขาย",
-        "เหรียญ": sim["asset"],
+        "เหรียญ": current_asset,
         "มูลค่า (บาท)": amount_thb,
         "ราคาที่ลูกค้าได้": quote,
         "เหรียญที่ส่งมอบ": coins,
@@ -950,7 +950,7 @@ def execute_order(
         "รายได้": revenue,
         "ต้นทุน": cost,
         "กำไรออเดอร์": net,
-        "สต็อกคงเหลือ": sim["inv_coins"],
+        "สต็อกคงเหลือ": sim["inv_coins"][current_asset],
         "FX ใช้สะสม (USD)": sim["fx_used_usd"],
         "CEX Liquidity ใช้สะสม (บาท)": sim["cex_used_thb"],
         "NC Buffer": nc["buffer"],
@@ -2567,7 +2567,7 @@ def render_tab3(cfg: dict[str, Any], data: pd.DataFrame, data_err: Optional[str]
     st.session_state.sim = sim
 
     coin_price_thb_now = spot_usd_current * usdthb_current
-    stock_thb_now = max(0.0, sim["inv_coins"]) * coin_price_thb_now
+    stock_thb_now = max(0.0, sim["inv_coins"][asset]) * coin_price_thb_now
     nc_now = nc_snapshot(
         stock_thb_now, cfg["total_capital_thb"], cfg["cex_margin_thb"],
         cfg["liab_thb"], h_crypto_sim, h_cex_sim, cfg["fixed_min_nc"],
@@ -2582,8 +2582,8 @@ def render_tab3(cfg: dict[str, Any], data: pd.DataFrame, data_err: Optional[str]
     else:
         stock_ratio = 0
     metric_card(
-        s1[0], f"สต็อก {asset} คงเหลือ", fmt_coin(sim["inv_coins"], asset),
-        sim["inv_coins"],
+        s1[0], f"สต็อก {asset} คงเหลือ", fmt_coin(sim["inv_coins"][asset], asset),
+        sim["inv_coins"][asset],
         f"{fmt_baht(stock_thb_now)} · {stock_ratio:.0f}% "
         f"ของเป้า {fmt_baht(target_stock_thb)}",
     )
@@ -2722,13 +2722,6 @@ def render_tab3(cfg: dict[str, Any], data: pd.DataFrame, data_err: Optional[str]
 </div>
 </div>
 {coin_rows_html}
-</div>
-<div style="display:flex;justify-content:space-between;padding:16px 28px;background:#161b21;border-top:1px solid #1f2937;">
-<div style="text-align:center;color:#6B7280;"><div style="font-size:1.4rem;margin-bottom:4px;">⟠</div><div style="font-size:0.75rem;">หน้าหลัก</div></div>
-<div style="text-align:center;color:#6B7280;"><div style="font-size:1.4rem;margin-bottom:4px;">📈</div><div style="font-size:0.75rem;">ตลาด</div></div>
-<div style="text-align:center;color:#6B7280;"><div style="font-size:1.4rem;margin-bottom:4px;">⇄</div><div style="font-size:0.75rem;">เทรด</div></div>
-<div style="text-align:center;color:#43c863;"><div style="font-size:1.4rem;margin-bottom:4px;">💳</div><div style="font-size:0.75rem;">กระเป๋าเงิน</div></div>
-<div style="text-align:center;color:#6B7280;"><div style="font-size:1.4rem;margin-bottom:4px;">👤</div><div style="font-size:0.75rem;">โปรไฟล์</div></div>
 </div>
 </div>"""
 
