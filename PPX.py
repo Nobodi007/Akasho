@@ -5,7 +5,7 @@ XSpring Dealer Suite — Single-File Build
 
 LAYERS
 ------
-  0. CONFIG & CONSTANTS     ค่าคงที่ของโมเดล
+  0. CONFIG & CONSTANTS     ค่าคงที่ของโมเดล (override ได้ด้วย config.yaml)
   1. ENGINE / PURE LOGIC    คณิตศาสตร์ล้วน ไม่แตะ streamlit / network
   2. DATA LAYER             yfinance / cache / CSV export
   3. UI THEME & COMPONENTS  CSS, metric card, timeline, gauge, TradingView
@@ -16,7 +16,7 @@ TESTABILITY
 -----------
 UI ถูกเรียกใต้ `if __name__ == "__main__"` เท่านั้น
   - Streamlit รันไฟล์นี้เป็น __main__  -> UI ทำงานปกติ
-  - unittest ทำ `import PPX as eng`    -> ได้เฉพาะ LAYER 0-1 ไม่มี side effect
+  - unittest ทำ `import xspring_dealer_suite as eng`    -> ได้เฉพาะ LAYER 0-1 ไม่มี side effect
 
 MODEL_VERSION / CHANGELOG
 -------------------------
@@ -27,18 +27,49 @@ v1.0.0  baseline    safety_stock_factor, crypto_haircut, blended NC custody rate
 v1.1.0              แยก pure logic ออกจาก app.py -> engine.py (structural only)
 v1.2.0              รวมกลับเป็นไฟล์เดียว + จัดชั้นโครงสร้าง
                     *** ไม่มีสูตรใดเปลี่ยน — structural version bump only ***
+v1.3.0              ปรับตามรีวิวรอบล่าสุด — ค่า default ให้ตัวเลขเดิมทุกตัว
+                    ฟีเจอร์ใหม่ทั้งหมดเป็น opt-in (ปิดอยู่จนกว่าผู้ใช้ตั้งค่า):
+                      + Type hints ทั้ง LAYER 1 / 2 / 4
+                      + LAYER 0 โหลด override จาก config.yaml (validate เข้ม,
+                        key พิมพ์ผิด = error) + config fingerprint ใน CSV export
+                      + Audit log ถาวร (.jsonl) ควบคู่กับ session log เดิม
+                      + Slippage ตามขนาดออเดอร์ / market depth (depth = 0 -> ปิด)
+                      + Maker/Taker fee แยกกัน (maker ratio = 0 -> ปิด)
+                      + แสดงวันที่ USD/THB ค้าง (เสาร์-อาทิตย์/วันหยุด) และ
+                        FX proxy แบบ rebase (ปิดเป็น default)
+                      + @st.fragment แยก TradingView panel และ Tab 3
+                        ออกจาก full rerun
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
+import math
+import os
 import re
+import urllib.parse
+import urllib.request
+import uuid
 from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Mapping, Optional
 
 import numpy as np
 import pandas as pd
 
-MODEL_VERSION = "1.2.0"
+MODEL_VERSION = "1.3.0"
+
+# PyYAML เป็น optional: ไม่มีไฟล์ config.yaml ก็ไม่ต้องใช้
+try:
+    import yaml
+except ImportError:  # pragma: no cover
+    yaml = None
+
+try:
+    _HERE = Path(__file__).resolve().parent
+except NameError:  # pragma: no cover - notebook
+    _HERE = Path.cwd()
 
 # UI stack เป็น optional dependency: import ไม่ได้ก็ยังใช้ engine ได้
 try:
@@ -50,6 +81,25 @@ try:
 except ImportError:  # pragma: no cover - เส้นทางสำหรับ unittest/notebook
     go = st = components = yf = None
     HAS_UI = False
+
+# st.fragment มีตั้งแต่ Streamlit 1.37 — เวอร์ชันเก่ากว่านั้นถอยกลับเป็น full rerun
+HAS_FRAGMENT = bool(HAS_UI and hasattr(st, "fragment"))
+
+
+def _fragment(fn):
+    """@st.fragment ที่ไม่พังเมื่อไม่มี streamlit (unittest) หรือเวอร์ชันเก่า"""
+    return st.fragment(fn) if HAS_FRAGMENT else fn
+
+
+def _rerun_fragment() -> None:
+    """rerun เฉพาะ fragment ปัจจุบัน; ถ้าทำไม่ได้ให้ถอยเป็น full rerun"""
+    if HAS_FRAGMENT:
+        try:
+            st.rerun(scope="fragment")
+        except Exception:  # RerunException เป็น BaseException จึงไม่ถูกจับตรงนี้
+            st.rerun()
+    else:
+        st.rerun()
 
 
 # =========================================================================
@@ -102,6 +152,211 @@ FALLBACK_USDTHB = 35.5
 MIN_RISK_SAMPLE_DAYS = 30
 RISK_SAMPLE_WARN_DAYS = 180
 
+# ---- 0.1 ค่าที่ย้ายออกจากตัวโค้ด / เพิ่มใน v1.3.0 -------------------------
+# ค่า default ทุกตัวด้านล่าง = พฤติกรรมเดิมทุกประการ (ก่อน v1.3.0 ค่าเหล่านี้
+# ฝังอยู่ในฟังก์ชัน/sidebar) — Business แก้ผ่าน config.yaml ได้โดยไม่ต้องแตะ .py
+
+# ค่าธรรมเนียมถอนบาท
+THB_WD_FEE_SCB = 20.0
+THB_WD_FEE_OTHER_SMALL = 20.0          # ธนาคารอื่น ยอด <= THB_WD_LARGE_THRESHOLD
+THB_WD_FEE_OTHER_LARGE = 70.0          # ธนาคารอื่น ยอด >  THB_WD_LARGE_THRESHOLD
+THB_WD_LARGE_THRESHOLD = 2_000_000.0
+
+# NC ขั้นต่ำคงที่ตามเกณฑ์ ก.ล.ต. (planning model)
+NC_FIXED_MIN_CUSTODIAN_THB = 25_000_000.0
+NC_FIXED_MIN_NON_CUSTODIAN_THB = 5_000_000.0
+
+# Maker fee ต่อกระดาน (หน่วยเดียวกับ GLOBAL_EXCHANGE_FEE_PRESET = เปอร์เซ็นต์)
+# ว่างไว้ = ใช้ค่า taker เป็นค่าตั้งต้นของ maker (ไม่เดาค่าธรรมเนียมแทนกระดาน
+# เพราะขึ้นกับเทียร์/โปรโมชันของบัญชีจริง) — ตั้งค่าจริงใน config.yaml
+GLOBAL_EXCHANGE_MAKER_FEE_PRESET: dict[str, float] = {}
+
+# ค่าตั้งต้นของช่อง input ใน sidebar (มีผลเฉพาะตอนเปิดหน้าครั้งแรกของเซสชัน)
+UI_DEFAULTS: dict[str, float] = {
+    "dealer_spread_pct": 0.5,
+    "local_premium_pct": 0.1,
+    "fx_limit_usd": 5_000_000.0,
+    "impact_penalty_pct": 0.5,   # % ราคาเสียเพิ่มเมื่อออเดอร์กิน depth 100%
+}
+
+# FX proxy สำหรับวันที่ตลาด FX ปิด — ปิดไว้เป็น default
+# url ต้องเป็น https ที่ตอบรูปแบบ TradingView UDF history (s/t/c) เท่านั้น
+FX_PROXY: dict[str, Any] = {
+    "enabled": False,
+    "url": "",
+    "symbol": "USDT_THB",
+    "resolution": "1D",
+}
+
+
+# ---- 0.2 External config loader -----------------------------------------
+
+class ConfigError(ValueError):
+    """config.yaml ไม่ถูกต้อง — หยุดแทนที่จะเดาค่าเองเงียบ ๆ"""
+
+
+CONFIG_ENV_VAR = "XSPRING_CONFIG"
+DEFAULT_CONFIG_PATH = _HERE / "config.yaml"
+CONFIG_INFO: dict[str, Any] = {"source": None, "sha256": None, "applied_keys": []}
+
+# key ใน YAML = ชื่อค่าคงที่แบบตัวพิมพ์เล็ก  ->  (ชนิด, ต่ำสุด, สูงสุด)
+_SCALAR_SPECS: dict[str, tuple[str, Optional[float], Optional[float]]] = {
+    "local_trading_fee_pct": ("float", 0.0, 0.05),       # เศษส่วน 0.0025 = 0.25%
+    "min_trade_thb": ("float", 0.0, None),
+    "hot_wallet_nc_rate": ("float", 0.0, 1.0),
+    "cold_domestic_nc_rate": ("float", 0.0, 1.0),
+    "hot_wallet_cap": ("float", 0.0, 1.0),
+    "hot_wallet_cap_liab_threshold": ("float", 0.0, None),
+    "fallback_usdthb": ("float", 1.0, None),
+    "min_risk_sample_days": ("int", 2, None),
+    "risk_sample_warn_days": ("int", 2, None),
+    "thb_wd_fee_scb": ("float", 0.0, None),
+    "thb_wd_fee_other_small": ("float", 0.0, None),
+    "thb_wd_fee_other_large": ("float", 0.0, None),
+    "thb_wd_large_threshold": ("float", 0.0, None),
+    "nc_fixed_min_custodian_thb": ("float", 0.0, None),
+    "nc_fixed_min_non_custodian_thb": ("float", 0.0, None),
+}
+# แผนที่ชื่อ -> ตัวเลข: merge ทับค่า default (เพิ่ม/แก้ได้ แต่ไม่ลบ key เดิม)
+_MAP_SPECS: dict[str, tuple[float, Optional[float]]] = {
+    "global_exchange_fee_preset": (0.0, 100.0),          # หน่วย %
+    "global_exchange_maker_fee_preset": (0.0, 100.0),    # หน่วย %
+    "withdrawal_fee_table": (0.0, None),                 # จำนวนเหรียญ
+}
+_UI_DEFAULT_SPECS: dict[str, tuple[float, Optional[float]]] = {
+    "dealer_spread_pct": (0.0, 100.0),
+    "local_premium_pct": (-100.0, 100.0),
+    "fx_limit_usd": (1.0, None),
+    "impact_penalty_pct": (0.0, 100.0),
+}
+_FX_PROXY_KEYS = {"enabled", "url", "symbol", "resolution"}
+
+
+def _num(name: str, v: Any, kind: str, lo: Optional[float], hi: Optional[float]) -> float:
+    if isinstance(v, bool) or not isinstance(v, (int, float)):
+        raise ConfigError(f"{name}: ต้องเป็นตัวเลข (ได้ {v!r})")
+    f = float(v)
+    if not math.isfinite(f):
+        raise ConfigError(f"{name}: ต้องเป็นตัวเลขจำกัด (ได้ {v!r})")
+    if kind == "int" and f != int(f):
+        raise ConfigError(f"{name}: ต้องเป็นจำนวนเต็ม (ได้ {v!r})")
+    if lo is not None and f < lo:
+        raise ConfigError(f"{name}: ต้อง >= {lo} (ได้ {v!r})")
+    if hi is not None and f > hi:
+        raise ConfigError(f"{name}: ต้อง <= {hi} (ได้ {v!r}) — เช็กหน่วยให้ตรงกับคอมเมนต์ใน config")
+    return int(f) if kind == "int" else f
+
+
+def validate_config(doc: Mapping[str, Any]) -> dict[str, Any]:
+    """ตรวจ config ทั้งก้อน แล้วคืน dict ที่ normalize แล้ว (ยังไม่ apply)
+
+    key ที่ไม่รู้จัก = error (กัน typo ที่ทำให้ค่าไม่ถูกใช้แบบเงียบ ๆ)
+    """
+    valid_keys = (set(_SCALAR_SPECS) | set(_MAP_SPECS)
+                  | {"ui_defaults", "fx_proxy"})
+    unknown = sorted(set(doc) - valid_keys)
+    if unknown:
+        raise ConfigError(f"key ที่ไม่รู้จักใน config: {unknown} — key ที่ใช้ได้: {sorted(valid_keys)}")
+
+    out: dict[str, Any] = {}
+    for key, (kind, lo, hi) in _SCALAR_SPECS.items():
+        if key in doc:
+            out[key] = _num(key, doc[key], kind, lo, hi)
+
+    for key, (lo, hi) in _MAP_SPECS.items():
+        if key in doc:
+            m = doc[key]
+            if not isinstance(m, Mapping) or not m:
+                raise ConfigError(f"{key}: ต้องเป็น map ที่ไม่ว่าง")
+            out[key] = {str(k): _num(f"{key}.{k}", v, "float", lo, hi)
+                        for k, v in m.items()}
+
+    if "ui_defaults" in doc:
+        u = doc["ui_defaults"]
+        if not isinstance(u, Mapping):
+            raise ConfigError("ui_defaults: ต้องเป็น map")
+        bad = sorted(set(u) - set(_UI_DEFAULT_SPECS))
+        if bad:
+            raise ConfigError(f"ui_defaults: key ไม่รู้จัก {bad} — ใช้ได้: {sorted(_UI_DEFAULT_SPECS)}")
+        out["ui_defaults"] = {k: _num(f"ui_defaults.{k}", v, "float", *_UI_DEFAULT_SPECS[k])
+                              for k, v in u.items()}
+
+    if "fx_proxy" in doc:
+        f = doc["fx_proxy"]
+        if not isinstance(f, Mapping):
+            raise ConfigError("fx_proxy: ต้องเป็น map")
+        bad = sorted(set(f) - _FX_PROXY_KEYS)
+        if bad:
+            raise ConfigError(f"fx_proxy: key ไม่รู้จัก {bad} — ใช้ได้: {sorted(_FX_PROXY_KEYS)}")
+        fx: dict[str, Any] = {}
+        if "enabled" in f:
+            if not isinstance(f["enabled"], bool):
+                raise ConfigError("fx_proxy.enabled: ต้องเป็น true/false")
+            fx["enabled"] = f["enabled"]
+        for k in ("url", "symbol", "resolution"):
+            if k in f:
+                if not isinstance(f[k], str):
+                    raise ConfigError(f"fx_proxy.{k}: ต้องเป็นข้อความ")
+                fx[k] = f[k].strip()
+        if fx.get("url") and not fx["url"].lower().startswith("https://"):
+            raise ConfigError("fx_proxy.url: ต้องขึ้นต้นด้วย https://")
+        if fx.get("enabled") and not (fx.get("url") or FX_PROXY["url"]):
+            raise ConfigError("fx_proxy.enabled = true แต่ยังไม่ได้ระบุ fx_proxy.url")
+        out["fx_proxy"] = fx
+
+    lo_d = out.get("min_risk_sample_days", MIN_RISK_SAMPLE_DAYS)
+    hi_d = out.get("risk_sample_warn_days", RISK_SAMPLE_WARN_DAYS)
+    if hi_d < lo_d:
+        raise ConfigError("risk_sample_warn_days ต้อง >= min_risk_sample_days")
+    return out
+
+
+def apply_config(overrides: Mapping[str, Any]) -> None:
+    """เขียนทับค่าคงที่ระดับ module ด้วยผล validate_config()"""
+    g = globals()
+    for key in _SCALAR_SPECS:
+        if key in overrides:
+            g[key.upper()] = overrides[key]
+    for key in _MAP_SPECS:
+        if key in overrides:
+            g[key.upper()].update(overrides[key])     # mutate in place
+    UI_DEFAULTS.update(overrides.get("ui_defaults", {}))
+    FX_PROXY.update(overrides.get("fx_proxy", {}))
+
+
+def load_external_config(path: Optional[str] = None) -> tuple[dict[str, Any], Optional[Path], Optional[str]]:
+    """คืน (overrides ที่ validate แล้ว, path ที่ใช้, sha256 ของไฟล์)
+
+    ไม่ระบุ path และไม่มี config.yaml ข้างไฟล์นี้ -> ({}, None, None)
+    ระบุ path (หรือ env XSPRING_CONFIG) แต่หาไฟล์ไม่เจอ -> ConfigError
+    """
+    explicit = path or os.environ.get(CONFIG_ENV_VAR)
+    p = Path(explicit) if explicit else DEFAULT_CONFIG_PATH
+    if not p.is_file():
+        if explicit:
+            raise ConfigError(f"ไม่พบไฟล์ config: {p}")
+        return {}, None, None
+    if yaml is None:
+        raise ConfigError(f"พบ {p.name} แต่ยังไม่ได้ติดตั้ง PyYAML — pip install pyyaml")
+    raw = p.read_bytes()
+    try:
+        doc = yaml.safe_load(raw) or {}
+    except yaml.YAMLError as e:
+        raise ConfigError(f"อ่าน {p.name} ไม่ได้ (YAML ผิดรูปแบบ): {e}") from e
+    if not isinstance(doc, dict):
+        raise ConfigError(f"{p.name}: ระดับบนสุดต้องเป็น map")
+    return validate_config(doc), p, hashlib.sha256(raw).hexdigest()[:12]
+
+
+def _bootstrap_config() -> None:
+    overrides, path, sha = load_external_config()
+    apply_config(overrides)
+    CONFIG_INFO.update(source=str(path) if path else None, sha256=sha,
+                       applied_keys=sorted(overrides))
+
+
+_bootstrap_config()
+
 
 # =========================================================================
 # LAYER 1 — ENGINE / PURE LOGIC
@@ -110,7 +365,7 @@ RISK_SAMPLE_WARN_DAYS = 180
 
 # ---- 1.1 Formatting -----------------------------------------------------
 
-def fmt_num(value, force_sign=False):
+def fmt_num(value: Any, force_sign: bool = False) -> str:
     value = 0.0 if pd.isna(value) else float(value)
     sign = "- " if value < 0 else ("+ " if force_sign else "")
     v = abs(value)
@@ -125,11 +380,11 @@ def fmt_num(value, force_sign=False):
     return f"{sign}{num}"
 
 
-def fmt_baht(value, force_sign=False):
+def fmt_baht(value: Any, force_sign: bool = False) -> str:
     return f"฿ {fmt_num(value, force_sign)}"
 
 
-def fmt_coin(value, symbol=""):
+def fmt_coin(value: float, symbol: str = "") -> str:
     v = abs(float(value))
     d = 6 if v < 1 else (4 if v < 1000 else 2)
     return f"{value:,.{d}f}" + (f" {symbol}" if symbol else "")
@@ -137,17 +392,21 @@ def fmt_coin(value, symbol=""):
 
 # ---- 1.2 Fee rules ------------------------------------------------------
 
-def calc_thb_withdrawal_fee(amount_thb, bank_type, ktb_fee_thb=15.0):
+def calc_thb_withdrawal_fee(amount_thb: float, bank_type: str,
+                            ktb_fee_thb: float = 15.0) -> float:
     if bank_type == "KTB (กรุงไทย)":
         return ktb_fee_thb
     if bank_type == "SCB":
-        return 20.0
-    return 20.0 if amount_thb <= 2_000_000 else 70.0
+        return THB_WD_FEE_SCB
+    if amount_thb <= THB_WD_LARGE_THRESHOLD:
+        return THB_WD_FEE_OTHER_SMALL
+    return THB_WD_FEE_OTHER_LARGE
 
 
 # ---- 1.3 FX limit gate --------------------------------------------------
 
-def apply_fx_limit(hedge_usd, index, fx_limit):
+def apply_fx_limit(hedge_usd: pd.Series, index: pd.DatetimeIndex,
+                   fx_limit: float) -> tuple[np.ndarray, np.ndarray]:
     """จัดสรรโควตา outbound FX รายเดือนให้ time series ของต้นทุน hedge
 
     fx_limit <= 0 เป็น input ที่ถูกต้อง (โควตาหมด/ปิดใช้งาน) และต้อง block
@@ -169,7 +428,7 @@ def apply_fx_limit(hedge_usd, index, fx_limit):
 
 # ---- 1.4 Risk engine ----------------------------------------------------
 
-def _risk_stats(r):
+def _risk_stats(r: pd.Series) -> Optional[dict[str, Any]]:
     r = r.replace([np.inf, -np.inf], np.nan).dropna()
     if len(r) < MIN_RISK_SAMPLE_DAYS:
         return None
@@ -189,22 +448,24 @@ def _risk_stats(r):
     }
 
 
-def risk_profile(px):
+def risk_profile(px: pd.Series) -> Optional[dict[str, Any]]:
     return _risk_stats(np.log(px / px.shift(1)))
 
 
-def safety_stock_factor(net_bias, flow_cv, lag_days, z_alpha):
+def safety_stock_factor(net_bias: float, flow_cv: float, lag_days: float,
+                        z_alpha: float) -> float:
     """a = (max(0, bias) x lag + z_alpha x CV x sqrt(lag)) / 30"""
     return (max(0.0, net_bias) * lag_days
             + z_alpha * flow_cv * np.sqrt(lag_days)) / 30.0
 
 
-def crypto_haircut(es99, lag_days):
+def crypto_haircut(es99: float, lag_days: float) -> float:
     """h = min(ES99 x sqrt(lag), 95%)"""
     return float(min(es99 * np.sqrt(lag_days), 0.95))
 
 
-def blended_custody_rate(hot_pct, cold_domestic_pct, cold_foreign_rate):
+def blended_custody_rate(hot_pct: float, cold_domestic_pct: float,
+                         cold_foreign_rate: float) -> float:
     """NC custody risk rate ถ่วงน้ำหนัก — ใช้กับฝั่ง `required` ของ NC เท่านั้น
 
     จงใจให้เป็นคนละตัวกับ h_crypto / crypto_haircut ซึ่งใช้ตีมูลค่าสต็อกจริง
@@ -217,9 +478,10 @@ def blended_custody_rate(hot_pct, cold_domestic_pct, cold_foreign_rate):
                                + (1 - cold_domestic_pct) * cold_foreign_rate))
 
 
-def nc_snapshot(stock_thb, total_capital, cex_margin, liab,
-                h_crypto, h_cex, fixed_min_nc,
-                trading_risk_rate, daily_volume_thb, custody_rate):
+def nc_snapshot(stock_thb: float, total_capital: float, cex_margin: float,
+                liab: float, h_crypto: float, h_cex: float, fixed_min_nc: float,
+                trading_risk_rate: float, daily_volume_thb: float,
+                custody_rate: float) -> dict[str, float]:
     """actual   = NC แบบ mark-to-risk ที่โต๊ะมีจริง (haircut ด้วย h_crypto/h_cex)
     required = NC ขั้นต่ำสไตล์เกณฑ์กำกับ (ใช้ custody_rate ไม่ใช่ h_crypto)
 
@@ -243,9 +505,118 @@ def nc_snapshot(stock_thb, total_capital, cex_margin, liab,
     }
 
 
-# ---- 1.5 Time-Travel order simulator — state machine --------------------
+# ---- 1.5 Execution cost model (v1.3.0) ---------------------------------
+# ทุกฟังก์ชันในหมวดนี้ "ปิดเป็น default": input ที่ไม่ได้ตั้ง (0) ให้ผลเท่าโมเดลเดิม
 
-def sim_defaults(asset_name, start_date_val, spot_usd, usdthb, target_stock_thb):
+def blend_hedge_fee(taker_fee: float, maker_fee: float, maker_ratio: float) -> float:
+    """ค่าธรรมเนียม Global CEX เฉลี่ยถ่วงน้ำหนักตามสัดส่วนที่ทำเป็น Maker
+
+    ทุกหน่วยเป็นเศษส่วน (0.001 = 0.10%); maker_ratio ถูก clamp เข้า [0, 1]
+    maker_ratio = 0 คืน taker_fee ตรง ๆ (พฤติกรรมเดิม)
+    NOTE: ไม่ได้จำลองความเสี่ยง limit order ไม่ถูก fill / adverse selection —
+    ratio สูงจึงเป็นการมองโลกในแง่ดีเรื่องต้นทุน
+    """
+    r = min(max(float(maker_ratio), 0.0), 1.0)
+    return taker_fee * (1.0 - r) + maker_fee * r
+
+
+def default_maker_fee_pct(exchange: str) -> float:
+    """ค่าตั้งต้นของ maker fee (%) — ไม่มี preset ของกระดานนั้นให้ใช้ taker"""
+    return GLOBAL_EXCHANGE_MAKER_FEE_PRESET.get(
+        exchange, GLOBAL_EXCHANGE_FEE_PRESET.get(exchange, 0.0))
+
+
+def depth_participation(order_usd: float, market_depth_usd: float) -> float:
+    """สัดส่วนที่ออเดอร์กิน market depth (0 = ปิดโมเดล / ไม่มี depth ให้ประเมิน)"""
+    if not market_depth_usd or market_depth_usd <= 0 or order_usd <= 0:
+        return 0.0
+    return float(order_usd) / float(market_depth_usd)
+
+
+def market_impact_rate(order_usd: float, market_depth_usd: float,
+                       impact_penalty: float) -> float:
+    """ส่วน slippage ที่ขึ้นกับขนาดออเดอร์ (เศษส่วนของ notional)
+
+        Slippage_Rate = Base + (Order_Size / Market_Depth) x Penalty
+
+    ฟังก์ชันนี้คืนเฉพาะเทอมที่สอง; Base ยังเป็น Volatility x Sensitivity เดิม
+    (ผู้เรียกบวกเอง) — market_depth <= 0 หรือ penalty <= 0 คืน 0.0 พอดี
+
+    market_depth_usd = มูลค่า order book ฝั่งที่ต้องกิน ภายในช่วงราคาที่ใช้ประเมิน
+    impact_penalty   = ราคาเสียเพิ่มเฉลี่ย (เศษส่วน) เมื่อออเดอร์กิน depth 100%
+                       เช่น depth นับที่ ±1% -> penalty ~ 0.005 (เฉลี่ยครึ่งช่วง)
+    โมเดลเป็นเส้นตรงตามสูตรที่รีวิวเสนอ: participation > 100% แปลว่าเกินกว่า
+    book ที่ประเมินไว้ ตัวเลขเชื่อไม่ได้ (UI ต้องเตือน)
+    """
+    if impact_penalty is None or impact_penalty <= 0:
+        return 0.0
+    return depth_participation(order_usd, market_depth_usd) * float(impact_penalty)
+
+
+# ---- 1.6 FX alignment (v1.3.0) ------------------------------------------
+
+def align_usdthb(official: pd.Series, index: pd.DatetimeIndex,
+                 proxy: Optional[pd.Series] = None) -> tuple[pd.Series, pd.Series]:
+    """จัดเรท USD/THB ให้ตรงกับปฏิทินคริปโต (7 วัน/สัปดาห์)
+
+    คืน (fx, source) โดย source เป็น "official" | "proxy" | "stale"
+      official = มีเรทจริงของวันนั้น
+      stale    = ไม่มีเรทของวันนั้น ใช้ค่าล่าสุดที่ค้างมา (ffill; วันก่อนแถวแรก bfill)
+      proxy    = ไม่มีเรทจริง แต่มี proxy ที่เทรด 24/7 (เช่น USDT/THB) จึงใช้
+                 "อัตราการเปลี่ยนของ proxy" คูณเข้ากับเรทจริงวันทำการล่าสุด
+
+    proxy ไม่ถูกใช้เป็นระดับราคา — USDT/THB มี premium/discount ต่างจาก USD/THB
+    จริง (และเปลี่ยนตามเวลา) การ rebase เข้ากับเรทจริงจึงตัด premium คงที่ทิ้ง
+    เหลือแต่การเคลื่อนไหวระหว่างวัน
+    proxy = None -> ตัวเลข fx เท่ากับ ffill().bfill() แบบเดิมทุกประการ
+    """
+    off = official.astype(float).reindex(index)
+    is_official = off.notna().to_numpy()
+    fx_arr = off.ffill().bfill().to_numpy(dtype=float).copy()
+    src = np.where(is_official, "official", "stale").astype(object)
+
+    if proxy is not None and len(proxy):
+        px = proxy.astype(float).reindex(index).ffill().to_numpy(dtype=float)
+        pos = np.where(is_official, np.arange(len(index), dtype=float), np.nan)
+        anchor = pd.Series(pos).ffill().to_numpy()          # ตำแหน่งวันทำการล่าสุด
+        cand = np.where(~is_official & ~np.isnan(anchor))[0]
+        if len(cand):
+            a_idx = anchor[cand].astype(int)
+            with np.errstate(divide="ignore", invalid="ignore"):
+                ratio = px[cand] / px[a_idx]
+            ok = np.isfinite(ratio) & (ratio > 0)
+            fx_arr[cand[ok]] = fx_arr[a_idx[ok]] * ratio[ok]
+            src[cand[ok]] = "proxy"
+
+    return (pd.Series(fx_arr, index=index, name="USDTHB"),
+            pd.Series(src, index=index, name="FX_Source"))
+
+
+def parse_udf_history(payload: Any) -> pd.Series:
+    """แปลง JSON แบบ TradingView UDF history (s/t/c) เป็น Series ปิดรายวัน
+
+    วันที่ของ bar อิงเวลา UTC — ใช้เฉพาะคำนวณอัตราการเปลี่ยนระหว่างวัน จึงไม่
+    กระทบระดับราคา; raise ValueError ถ้ารูปแบบไม่ตรง
+    """
+    if not isinstance(payload, Mapping) or payload.get("s") != "ok":
+        raise ValueError("response ไม่ใช่รูปแบบ UDF history ที่ s == 'ok'")
+    t, c = payload.get("t"), payload.get("c")
+    if not t or not c or len(t) != len(c):
+        raise ValueError("response ไม่มีข้อมูลเวลา/ราคาปิด หรือความยาวไม่เท่ากัน")
+    idx = pd.to_datetime(list(t), unit="s", utc=True).tz_convert(None).normalize()
+    s = pd.Series(pd.to_numeric(pd.Series(list(c)), errors="coerce").to_numpy(),
+                  index=idx, dtype=float)
+    s = s[~s.index.duplicated(keep="last")].dropna()
+    s = s[s > 0].sort_index()
+    if s.empty:
+        raise ValueError("ไม่มีแถวราคาที่ใช้ได้หลังทำความสะอาด")
+    return s
+
+
+# ---- 1.7 Time-Travel order simulator — state machine --------------------
+
+def sim_defaults(asset_name: str, start_date_val: Any, spot_usd: float,
+                 usdthb: float, target_stock_thb: float) -> dict[str, Any]:
     coin_price = spot_usd * usdthb
     return {
         "asset": asset_name,
@@ -260,7 +631,8 @@ def sim_defaults(asset_name, start_date_val, spot_usd, usdthb, target_stock_thb)
     }
 
 
-def sim_config_signature(ctx, target_stock_thb, start_date, end_date):
+def sim_config_signature(ctx: Mapping[str, Any], target_stock_thb: float,
+                         start_date: Any, end_date: Any) -> tuple:
     """ลายนิ้วมือของ config — ใช้ตรวจว่า 'พารามิเตอร์เปลี่ยน -> ต้องรีเซ็ต sim'"""
     keys = [
         "asset", "local_premium", "spread", "hedge_fee",
@@ -268,7 +640,7 @@ def sim_config_signature(ctx, target_stock_thb, start_date, end_date):
         "wd_markup", "wd_fee_per_coin", "bank_type", "ktb_wd_fee", "ktb_fx_bps",
         "capital", "cex_margin", "cex_liquidity_thb", "liab", "h_crypto", "h_cex",
         "fixed_min_nc", "trading_risk_rate", "daily_volume_thb", "custody_rate",
-        "hot_breach",
+        "hot_breach", "market_depth_usd", "impact_penalty",
     ]
     values = []
     for key in keys:
@@ -283,7 +655,9 @@ def sim_config_signature(ctx, target_stock_thb, start_date, end_date):
     return tuple(values)
 
 
-def sim_normalize_state(sim, asset, start_date_val, spot_usd, usdthb, target_stock_thb):
+def sim_normalize_state(sim: Any, asset: str, start_date_val: Any,
+                        spot_usd: float, usdthb: float,
+                        target_stock_thb: float) -> dict[str, Any]:
     if not isinstance(sim, dict):
         return sim_defaults(asset, start_date_val, spot_usd, usdthb, target_stock_thb)
 
@@ -317,7 +691,10 @@ def sim_normalize_state(sim, asset, start_date_val, spot_usd, usdthb, target_sto
     return sim
 
 
-def execute_order(sim, side, amount_thb, order_date, px_row, ctx):
+def execute_order(
+    sim: dict[str, Any], side: str, amount_thb: float, order_date: pd.Timestamp,
+    px_row: pd.Series, ctx: Mapping[str, Any],
+) -> tuple[list[dict[str, Any]], Optional[dict[str, Any]]]:
     """รันออเดอร์ลูกค้า 1 รายการผ่าน quote -> settlement -> inventory -> hedge
     -> gates -> P&L โดย mutate `sim` in place
 
@@ -624,10 +1001,20 @@ def execute_order(sim, side, amount_thb, order_date, px_row, ctx):
                    + calc_thb_withdrawal_fee(amount_thb, p["bank_type"], p["ktb_wd_fee"]))
         wd_markup_rev = wd_base * p["wd_markup"]
 
+    depth_usd = float(p.get("market_depth_usd") or 0.0)
+    impact_pen = float(p.get("impact_penalty") or 0.0)
+    depth_on = depth_usd > 0 and impact_pen > 0
+    hedge_part = 0.0
+    impact_cost = 0.0
     if hedged_coins > 0:
         ktb_fx_benefit = hedge_thb * (p["ktb_fx_bps"] / 10000.0)
         hedge_fee_cost = hedge_thb * p["hedge_fee"]
-        slippage_cost = hedge_thb * daily_vol * p["slip_sens"]
+        hedge_order_usd = hedged_coins * spot
+        hedge_part = depth_participation(hedge_order_usd, depth_usd)
+        # Base (Volatility x Sensitivity) + Market Impact ตามขนาดออเดอร์ / depth
+        impact_cost = hedge_thb * market_impact_rate(hedge_order_usd, depth_usd,
+                                                     impact_pen)
+        slippage_cost = hedge_thb * daily_vol * p["slip_sens"] + impact_cost
     else:
         ktb_fx_benefit = 0.0
         hedge_fee_cost = 0.0
@@ -657,7 +1044,10 @@ def execute_order(sim, side, amount_thb, order_date, px_row, ctx):
             ("KTB FX Benefit", "+ " + fmt_baht(ktb_fx_benefit)),
             ("ค่าธรรมเนียม CEX", "- " + fmt_baht(hedge_fee_cost)),
             ("Slippage", "- " + fmt_baht(slippage_cost)),
-        ],
+        ] + ([
+            (f"  └ ส่วน Market Impact (กิน depth {hedge_part * 100:,.1f}%)",
+             "- " + fmt_baht(impact_cost)),
+        ] if depth_on else []),
         total=("กำไรสุทธิ",
                f"{fmt_baht(net, force_sign=True)} ({net_bps:,.1f} bps)"),
     ))
@@ -715,7 +1105,7 @@ def _cache_data(*dargs, **dkwargs):
     return decorator
 
 
-def _normalize_index(d):
+def _normalize_index(d: pd.DataFrame) -> pd.DataFrame:
     idx = pd.to_datetime(d.index)
     try:
         if getattr(idx, "tz", None) is not None:
@@ -726,8 +1116,34 @@ def _normalize_index(d):
     return d
 
 
+@_cache_data(ttl=3600, show_spinner=False)
+def fetch_fx_proxy_series(start: Any, end: Any) -> tuple[Optional[pd.Series], Optional[str]]:
+    """ดึงราคาปิดรายวันของ FX proxy (เช่น USDT/THB) จาก endpoint ใน config
+
+    คืน (series, None) เมื่อสำเร็จ หรือ (None, ข้อความ error) — ไม่ raise
+    เพื่อให้ผู้เรียกถอยกลับไปใช้เรทค้างได้ พร้อมแสดงสถานะให้ผู้ใช้เห็น
+    """
+    if not (FX_PROXY["enabled"] and FX_PROXY["url"]):
+        return None, "FX proxy ไม่ได้เปิดใช้ใน config"
+    try:
+        t0 = int(pd.Timestamp(start).tz_localize("UTC").timestamp())
+        t1 = int(pd.Timestamp(end).tz_localize("UTC").timestamp()) + 86400
+        qs = urllib.parse.urlencode({
+            "symbol": FX_PROXY["symbol"], "resolution": FX_PROXY["resolution"],
+            "from": t0, "to": t1,
+        })
+        url = FX_PROXY["url"] + ("&" if "?" in FX_PROXY["url"] else "?") + qs
+        req = urllib.request.Request(url, headers={"User-Agent": "XSpringDealerSuite"})
+        with urllib.request.urlopen(req, timeout=10) as resp:      # noqa: S310 (https เท่านั้น)
+            payload = json.loads(resp.read().decode("utf-8"))
+        return parse_udf_history(payload), None
+    except Exception as e:  # network / JSON / รูปแบบไม่ตรง — ไม่ให้แอปล้ม
+        return None, f"ดึง FX proxy ไม่สำเร็จ: {e}"
+
+
 @_cache_data(ttl=3600, show_spinner="กำลังโหลดข้อมูลราคาย้อนหลัง…")
-def fetch_price_data(ticker, start, end):
+def fetch_price_data(ticker: str, start: Any, end: Any,
+                     use_fx_proxy: bool = False) -> tuple[pd.DataFrame, Optional[str]]:
     try:
         raw = yf.download(f"{ticker}-USD", start=start, end=end,
                           auto_adjust=False, progress=False)
@@ -751,7 +1167,11 @@ def fetch_price_data(ticker, start, end):
 
     df = raw[["Close", "High", "Low"]].copy()
     df.columns = ["Global_USD", "Day_High", "Day_Low"]
-    df["USDTHB"] = fx_raw["Close"].reindex(df.index).ffill().bfill()
+    proxy = None
+    if use_fx_proxy:
+        proxy, _proxy_err = fetch_fx_proxy_series(start, end)   # None = ถอยเป็นเรทค้าง
+    # FX_Source บอกว่าแต่ละวันใช้เรทจริง / proxy / ค่าค้าง (เสาร์-อาทิตย์, วันหยุด)
+    df["USDTHB"], df["FX_Source"] = align_usdthb(fx_raw["Close"].dropna(), df.index, proxy)
     df = df.dropna()
     if df.empty:
         return pd.DataFrame(), "ข้อมูลที่ได้ว่างเปล่าหลังทำความสะอาด"
@@ -761,7 +1181,7 @@ def fetch_price_data(ticker, start, end):
 
 
 @_cache_data(ttl=900, show_spinner=False)
-def _fetch_latest_usdthb():
+def _fetch_latest_usdthb() -> Optional[float]:
     fx_raw = yf.download("THB=X", period="5d", auto_adjust=False, progress=False)
     if fx_raw is None or fx_raw.empty:
         return None
@@ -771,7 +1191,7 @@ def _fetch_latest_usdthb():
     return float(val.iloc[-1]) if not val.empty else None
 
 
-def get_reference_usdthb(preferred_df=None):
+def get_reference_usdthb(preferred_df: Optional[pd.DataFrame] = None) -> tuple[float, bool]:
     """คืน (usdthb_rate, is_fallback)
 
     ใช้แถวสุดท้ายของ `preferred_df` ก่อนถ้ามีข้อมูลอยู่แล้ว (เลี่ยง network call
@@ -791,11 +1211,12 @@ def get_reference_usdthb(preferred_df=None):
 
 
 @_cache_data(show_spinner=False)
-def to_csv_bytes(df):
+def to_csv_bytes(df: pd.DataFrame) -> bytes:
     return df.to_csv().encode("utf-8-sig")
 
 
-def to_csv_bytes_with_assumptions(df, assumptions, report_title):
+def to_csv_bytes_with_assumptions(df: pd.DataFrame, assumptions: Mapping[str, Any],
+                                  report_title: str) -> bytes:
     """แนบ header สมมติฐาน/พารามิเตอร์ไว้บนหัวไฟล์ export
 
     ข้อกำหนด compliance/audit: ทุกชุดตัวเลขที่ export ต้องพกค่าพารามิเตอร์ที่ใช้
@@ -806,6 +1227,8 @@ def to_csv_bytes_with_assumptions(df, assumptions, report_title):
     lines = [
         f"# {report_title}",
         f"# Model version,{MODEL_VERSION}",
+        f"# Config file,{CONFIG_INFO['source'] or 'built-in defaults'}",
+        f"# Config sha256,{CONFIG_INFO['sha256'] or '-'}",
         f"# Exported at (UTC),{exported_at}",
         "# --- Assumptions / Parameters used for this export ---",
     ]
@@ -1067,8 +1490,10 @@ def render_tradingview(symbol, container_id, height=500, interval="D", studies=N
     NOTE เรื่องต้นทุน: widget นี้ re-render (และโหลด tv.js ใหม่) ทุกครั้งที่
     Streamlit rerun รวมถึง rerun ที่เกิดจาก widget อื่นในหน้าเดียวกัน (เช่นทุก
     ออเดอร์ใน Tab 3) ดังนั้น `container_id` ควรคงที่ต่อจุดเรียกเพื่อให้เบราว์เซอร์
-    ใช้ script cache ของตัวเองได้ การเลี่ยง re-mount จริง ๆ ต้องย้ายการวาดกราฟ
-    ออกจาก hot-rerun path ซึ่งใหญ่เกินขอบเขตรอบนี้
+    ใช้ script cache ของตัวเองได้
+    v1.3.0: Tab 3 และแผงกราฟ (render_tv_panel) เป็น @st.fragment แล้ว การกดปุ่ม
+    ในสองส่วนนี้จึงไม่ทำให้ widget ของอีกฝั่งโหลดใหม่ — แต่การเปลี่ยนค่าใน
+    sidebar ยังเป็น full rerun เหมือนเดิม (ต้องคำนวณตัวเลขใหม่)
     """
     studies_js = str(studies or []).replace("'", '"')
     html = f"""
@@ -1113,18 +1538,151 @@ def render_tradingview(symbol, container_id, height=500, interval="D", studies=N
     components.html(html, height=height + 8)
 
 
+@_fragment
+def render_tv_panel(asset: str) -> None:
+    """แผงกราฟ TradingView + ตัวเลือกมุมมอง เป็น fragment ของตัวเอง
+
+    การกดเปลี่ยนมุมมองจึง rerun เฉพาะแผงนี้ ไม่คำนวณ backtest ทั้งหน้าซ้ำ
+    NOTE: fragment ไม่ได้กัน rerun ที่มาจาก sidebar — sidebar อยู่นอก fragment
+    และตัวเลขใน Tab 1 ต้องคำนวณใหม่ตามพารามิเตอร์อยู่แล้ว
+    """
+    tv_mode = st.radio(
+        "มุมมองกราฟ",
+        ["กระดานไทย (Bitkub)", "กระดานโลก (Binance)", "เทียบ 2 กระดาน"],
+        horizontal=True, key="tv_mode_bt",
+    )
+    local_sym = TV_LOCAL_SYMBOL.get(asset, f"BITKUB:{asset}THB")
+    global_sym = TV_GLOBAL_SYMBOL.get(asset, f"BINANCE:{asset}USDT")
+
+    if tv_mode == "กระดานไทย (Bitkub)":
+        render_tradingview(local_sym, "tv_bt_local", 520,
+                           studies=["RSI@tv-basicstudies"])
+    elif tv_mode == "กระดานโลก (Binance)":
+        render_tradingview(global_sym, "tv_bt_global", 520,
+                           studies=["RSI@tv-basicstudies"])
+    else:
+        g1, g2 = st.columns(2)
+        with g1:
+            st.caption(f"🇹🇭 ราคาจริงฝั่งไทย — `{local_sym}`")
+            render_tradingview(local_sym, "tv_cmp_local", 420)
+        with g2:
+            st.caption(f"🌐 ราคาโลก — `{global_sym}`")
+            render_tradingview(global_sym, "tv_cmp_global", 420)
+
+
 # =========================================================================
 # LAYER 4 — AUDIT TRAIL
 #   ข้อกำหนด compliance: "Log การเปลี่ยนพารามิเตอร์ (ใครปรับอะไร เมื่อไหร่)"
-#   ยังไม่รู้ "ใคร" ถ้าไม่มี auth layer (นอกขอบเขต) แต่รู้ "อะไร" และ "เมื่อไหร่"
-#   ได้ ซึ่งเป็นส่วนที่ใช้จริงตอนไล่ย้อนว่า "ทำไมตัวเลขระหว่าง export สองครั้ง
-#   ถึงต่างกัน" — append เฉพาะตอนค่าเปลี่ยนจริง เพื่อไม่ให้ log ท่วมจาก rerun
+#   v1.3.0: บันทึกสองทาง — (1) session_state สำหรับแสดงใน sidebar (2) ไฟล์
+#   .jsonl แบบ append-only ที่รอดการรีเฟรชหน้า/รีสตาร์ท (ดู audit_log_path())
+#   "ใคร" รู้ก็ต่อเมื่อมี auth (st.user) หรือ env XSPRING_USER — ไม่งั้น "unknown"
+#   append เฉพาะตอนค่าเปลี่ยนจริง เพื่อไม่ให้ log ท่วมจาก rerun
 # =========================================================================
 
-def _audit_log_param_changes(current_params):
+AUDIT_LOG_ENV_VAR = "XSPRING_AUDIT_LOG"
+AUDIT_ACTOR_ENV_VAR = "XSPRING_USER"
+
+
+def audit_log_path() -> Path:
+    """ไฟล์ .jsonl ถาวร — ตั้งเองได้ด้วย env XSPRING_AUDIT_LOG
+
+    NOTE: ถ้ารันบน host ที่ filesystem ชั่วคราว (เช่น Streamlit Community Cloud)
+    ไฟล์จะหายตอน redeploy/restart — ให้ชี้ env ไปยัง volume ถาวร
+    """
+    return Path(os.environ.get(AUDIT_LOG_ENV_VAR) or (_HERE / "audit_log.jsonl"))
+
+
+def _json_safe(v: Any) -> Any:
+    if v is None or isinstance(v, (str, bool)):
+        return v
+    if isinstance(v, (int, np.integer)):
+        return int(v)
+    if isinstance(v, (float, np.floating)):
+        f = float(v)
+        # 12 หลักนัยสำคัญ: กัน artifact เช่น 0.7/100 = 0.006999999999999999 ใน log
+        return float(f"{f:.12g}") if math.isfinite(f) else None
+    if isinstance(v, np.bool_):
+        return bool(v)
+    if isinstance(v, Mapping):
+        return {str(k): _json_safe(x) for k, x in v.items()}
+    if isinstance(v, (list, tuple)):
+        return [_json_safe(x) for x in v]
+    return str(v)
+
+
+def build_audit_records(prev: Optional[Mapping[str, Any]], current: Mapping[str, Any], *,
+                        session_id: str, actor: str = "unknown",
+                        now: Optional[datetime] = None) -> list[dict[str, Any]]:
+    """สร้างรายการ audit จากพารามิเตอร์ก่อนหน้า vs ปัจจุบัน (pure — ไม่มี I/O)
+
+    prev = None (โหลดหน้าครั้งแรกของเซสชัน) -> 1 รายการ session_start
+    พร้อมพารามิเตอร์ทั้งชุด เพื่อให้ไล่ย้อนได้ว่าเซสชันนั้น "เริ่มจากค่าอะไร"
+    จากนั้นบันทึก param_change เฉพาะ key ที่ค่าเปลี่ยนจริง
+    """
+    ts = (now or datetime.now(timezone.utc)).isoformat(timespec="seconds")
+    base = {
+        "ts": ts, "session_id": session_id, "actor": actor,
+        "model_version": MODEL_VERSION, "config_sha256": CONFIG_INFO["sha256"],
+    }
+    if prev is None:
+        return [{**base, "event": "session_start", "params": _json_safe(dict(current))}]
+    records = []
+    for key, new_val in current.items():
+        old_val = prev.get(key)
+        if old_val != new_val:
+            records.append({**base, "event": "param_change", "param": key,
+                            "old": _json_safe(old_val), "new": _json_safe(new_val)})
+    return records
+
+
+def append_audit_records(records: list[dict[str, Any]], path: Optional[Path] = None) -> None:
+    """append แบบ JSON Lines (1 record ต่อบรรทัด) + fsync; raise OSError ถ้าเขียนไม่ได้"""
+    if not records:
+        return
+    p = Path(path) if path else audit_log_path()
+    p.parent.mkdir(parents=True, exist_ok=True)
+    with p.open("a", encoding="utf-8") as fh:
+        for rec in records:
+            fh.write(json.dumps(rec, ensure_ascii=False) + "\n")
+        fh.flush()
+        os.fsync(fh.fileno())
+
+
+def read_audit_records(path: Optional[Path] = None, limit: Optional[int] = None) -> list[dict[str, Any]]:
+    """อ่าน audit log กลับมา (ข้ามบรรทัดที่พัง เช่น เขียนค้างตอนไฟดับ)"""
+    p = Path(path) if path else audit_log_path()
+    if not p.is_file():
+        return []
+    out = []
+    with p.open(encoding="utf-8") as fh:
+        for line in fh:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                out.append(json.loads(line))
+            except json.JSONDecodeError:
+                continue
+    return out[-limit:] if limit else out
+
+
+def _current_actor() -> str:
+    """ระบุ "ใคร": ใช้ st.user ถ้าแอปตั้ง auth ไว้, ไม่งั้น env XSPRING_USER, ไม่งั้น unknown"""
+    try:
+        email = getattr(st.user, "email", None)
+        if email:
+            return str(email)
+    except Exception:
+        pass
+    return os.environ.get(AUDIT_ACTOR_ENV_VAR) or "unknown"
+
+
+def _audit_log_param_changes(current_params: Mapping[str, Any]) -> None:
     prev = st.session_state.get("audit_prev_params")
     if "audit_log" not in st.session_state:
         st.session_state.audit_log = []
+    if "audit_session_id" not in st.session_state:
+        st.session_state.audit_session_id = uuid.uuid4().hex[:12]
 
     if prev is not None:
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -1137,6 +1695,17 @@ def _audit_log_param_changes(current_params):
                     "ค่าเดิม": old_val,
                     "ค่าใหม่": new_val,
                 })
+
+    # บันทึกลงไฟล์ถาวรควบคู่กับ session log — ถ้าเขียนไม่ได้ต้องให้ผู้ใช้เห็น
+    # (audit ที่หายเงียบ ๆ แย่กว่าไม่มี)
+    records = build_audit_records(prev, current_params,
+                                  session_id=st.session_state.audit_session_id,
+                                  actor=_current_actor())
+    try:
+        append_audit_records(records)
+        st.session_state.audit_write_error = None
+    except OSError as e:
+        st.session_state.audit_write_error = f"{audit_log_path()}: {e}"
     st.session_state.audit_prev_params = dict(current_params)
 
 
@@ -1146,9 +1715,22 @@ def render_audit_log_sidebar():
     with st.expander(title, expanded=False):
         st.caption(
             f"Model v{MODEL_VERSION} · บันทึกอัตโนมัติทุกครั้งที่พารามิเตอร์ที่มีผล"
-            "ต่อการคำนวณเปลี่ยนค่า (ไม่บันทึก 'ใคร' เพราะแอปนี้ยังไม่มีระบบ "
-            "authentication แยกผู้ใช้)"
+            "ต่อการคำนวณเปลี่ยนค่า · ช่อง actor จะมีชื่อผู้ใช้ก็ต่อเมื่อแอปตั้ง "
+            "authentication หรือกำหนด env XSPRING_USER (ไม่งั้นเป็น 'unknown')"
         )
+        err = st.session_state.get("audit_write_error")
+        if err:
+            st.error(f"⚠️ เขียน audit log ลงไฟล์ไม่สำเร็จ — {err}")
+        else:
+            st.caption(f"💾 บันทึกถาวรที่ `{audit_log_path()}` (JSON Lines) · "
+                       f"config: `{CONFIG_INFO['source'] or 'built-in defaults'}`")
+        _p = audit_log_path()
+        if _p.is_file():
+            st.download_button(
+                "⬇️ ดาวน์โหลดไฟล์ Audit Log ถาวรทั้งไฟล์ (JSONL)",
+                _p.read_bytes(), "xspring_audit_log.jsonl",
+                "application/x-ndjson", key="dl_audit_jsonl", **WIDE,
+            )
         if not log:
             st.caption("ยังไม่มีการเปลี่ยนพารามิเตอร์ในเซสชันนี้")
             return
@@ -1172,7 +1754,7 @@ def render_audit_log_sidebar():
 # LAYER 5 — APP
 # =========================================================================
 
-def build_sidebar():
+def build_sidebar() -> dict[str, Any]:
     """วาด sidebar ทั้งหมด แล้วคืน dict ของพารามิเตอร์ที่ทุกแท็บใช้ร่วมกัน"""
     with st.sidebar:
         st.markdown("### ⚙️ Backtest Settings")
@@ -1227,27 +1809,58 @@ def build_sidebar():
         if not dates_ok:
             st.error("❌ วันเริ่มต้นต้องมาก่อนวันสิ้นสุด")
 
+        if FX_PROXY["enabled"] and FX_PROXY["url"]:
+            use_fx_proxy = st.checkbox(
+                f"ใช้ {FX_PROXY['symbol']} เป็น proxy ของ USD/THB ช่วงตลาด FX ปิด",
+                value=False, key="bt_use_fx_proxy",
+                help=("เสาร์-อาทิตย์/วันหยุดจะใช้ 'อัตราการเปลี่ยน' ของ proxy คูณเข้ากับ"
+                      "เรทวันทำการล่าสุด (ไม่ใช้ระดับราคาของ proxy ตรง ๆ) · "
+                      "ปิด = ใช้เรทค้างแบบเดิม"))
+        else:
+            use_fx_proxy = False
+
         with st.expander("💰 พารามิเตอร์ Dealer", expanded=True):
             trade_vol = comma_number_input(
                 "ปริมาณซื้อขายลูกค้า/วัน (USD eq.)", value=100000, key="bt_trade_vol")
             dealer_spread = st.number_input(
-                "Dealer Spread ที่เก็บจากลูกค้า (%)", value=0.5, step=0.1,
+                "Dealer Spread ที่เก็บจากลูกค้า (%)",
+                value=float(UI_DEFAULTS["dealer_spread_pct"]), step=0.1,
                 key="bt_spread") / 100
 
             if "bt_prev_gx" not in st.session_state:
                 st.session_state.bt_prev_gx = global_exchange
             if "bt_hedge_fee" not in st.session_state:
                 st.session_state.bt_hedge_fee = GLOBAL_EXCHANGE_FEE_PRESET[global_exchange]
+            if "bt_hedge_fee_maker" not in st.session_state:
+                st.session_state.bt_hedge_fee_maker = default_maker_fee_pct(global_exchange)
             if st.session_state.bt_prev_gx != global_exchange:
                 st.session_state.bt_hedge_fee = GLOBAL_EXCHANGE_FEE_PRESET[global_exchange]
+                st.session_state.bt_hedge_fee_maker = default_maker_fee_pct(global_exchange)
                 st.session_state.bt_prev_gx = global_exchange
 
-            hedge_fee = st.number_input(
-                "ค่าธรรมเนียม Global CEX (%)", key="bt_hedge_fee", step=0.01) / 100
+            hedge_fee_taker = st.number_input(
+                "ค่าธรรมเนียม Global CEX — Taker (%)", key="bt_hedge_fee",
+                step=0.01) / 100
+            hedge_fee_maker = st.number_input(
+                "ค่าธรรมเนียม Global CEX — Maker (%)", key="bt_hedge_fee_maker",
+                step=0.01,
+                help=("ค่าตั้งต้น = เท่า Taker จนกว่าจะตั้ง maker preset ใน config.yaml "
+                      "หรือแก้ช่องนี้ตามเทียร์บัญชีจริง")) / 100
+            maker_ratio = st.slider(
+                "สัดส่วน Hedge ที่ทำเป็น Maker / Limit (%)", 0, 100, 0,
+                key="bt_maker_ratio",
+                help=("0 = hedge แบบ Taker ทั้งหมด (โมเดลเดิม) · ยังไม่จำลองความเสี่ยง"
+                      "ที่ Limit order ไม่ถูก fill จึงยิ่งสูงยิ่งมองโลกในแง่ดี")) / 100
+            # ทุกจุดในโมเดลใช้ hedge_fee เป็น "อัตราเฉลี่ยที่จ่ายจริง"
+            hedge_fee = blend_hedge_fee(hedge_fee_taker, hedge_fee_maker, maker_ratio)
+            if maker_ratio > 0:
+                st.caption(f"ค่าธรรมเนียม Hedge เฉลี่ยที่ใช้คำนวณ: **{hedge_fee * 100:.4f}%**")
             fx_limit_max = comma_number_input(
-                "FX Limit ต่อเดือน (USD)", value=5000000, min_value=1, key="bt_fx_limit")
+                "FX Limit ต่อเดือน (USD)", value=UI_DEFAULTS["fx_limit_usd"],
+                min_value=1, key="bt_fx_limit")
             local_premium = st.number_input(
-                "Local Premium/Discount ฝั่งไทย (%)", value=0.1, step=0.1,
+                "Local Premium/Discount ฝั่งไทย (%)",
+                value=float(UI_DEFAULTS["local_premium_pct"]), step=0.1,
                 key="bt_local_premium") / 100
 
         with st.expander("💳 ค่าธรรมเนียมกระดานไทย"):
@@ -1284,11 +1897,24 @@ def build_sidebar():
                 carry_apy = st.number_input(
                     "Carry Yield APY (%)", value=4.0, step=0.5, key="bt_carry") / 100
             slippage_sensitivity = 0.0
+            market_depth_usd, impact_penalty = 0.0, 0.0
         else:
             with st.expander("📉 Execution Model", expanded=True):
                 slippage_sensitivity = st.number_input(
                     "Slippage Sensitivity (% ของ Volatility)", value=10.0,
                     step=1.0, key="bt_slip") / 100
+                market_depth_usd = comma_number_input(
+                    "Market Depth ฝั่งที่ต้องกิน (USD) — 0 = ปิด", value=0,
+                    min_value=0, key="bt_depth",
+                    help=("มูลค่า order book บน Global CEX ภายในช่วงราคาที่ใช้ประเมิน "
+                          "ต้องหาจากกระดานจริงของเหรียญนี้ — ไม่มีค่ามาตรฐาน · "
+                          "0 = ใช้ slippage แบบเดิม (สัดส่วนของ volatility อย่างเดียว)"))
+                impact_penalty = st.number_input(
+                    "Impact Penalty (% ราคาเสียเพิ่ม เมื่อออเดอร์กิน depth 100%)",
+                    value=float(UI_DEFAULTS["impact_penalty_pct"]), step=0.1,
+                    min_value=0.0, key="bt_impact_pen",
+                    help=("Slippage = Base + (Order ÷ Depth) × Penalty · ถ้านับ depth "
+                          "ภายใน ±1% ของราคากลาง Penalty ≈ 0.5%")) / 100
             peg_target, depeg_capture_pct, carry_apy = 1.0, 0.0, 0.0
 
         st.divider()
@@ -1330,7 +1956,8 @@ def build_sidebar():
         with st.expander("⚖️ เกณฑ์เงินกองทุน ก.ล.ต.", expanded=False):
             is_custodian = st.checkbox(
                 "เก็บรักษาทรัพย์สินลูกค้า", value=True, key="nc_custodian")
-            fixed_min_nc = 25_000_000.0 if is_custodian else 5_000_000.0
+            fixed_min_nc = (NC_FIXED_MIN_CUSTODIAN_THB if is_custodian
+                            else NC_FIXED_MIN_NON_CUSTODIAN_THB)
             trading_risk_rate = st.number_input(
                 "อัตรา NC ความเสี่ยงซื้อขาย (%)", value=2.0, step=0.1,
                 min_value=0.0, key="nc_trading_rate") / 100
@@ -1348,7 +1975,10 @@ def build_sidebar():
             asset=asset, global_exchange=global_exchange,
             start_date=str(start_date), end_date=str(end_date),
             trade_vol=trade_vol, dealer_spread=dealer_spread,
-            hedge_fee=hedge_fee, fx_limit_max=fx_limit_max,
+            hedge_fee=hedge_fee, hedge_fee_taker=hedge_fee_taker,
+            hedge_fee_maker=hedge_fee_maker, maker_ratio=maker_ratio,
+            market_depth_usd=market_depth_usd, impact_penalty=impact_penalty,
+            use_fx_proxy=use_fx_proxy, fx_limit_max=fx_limit_max,
             local_premium=local_premium,
             include_trading_fee_revenue=include_trading_fee_revenue,
             withdrawal_fee_markup_pct=withdrawal_fee_markup_pct,
@@ -1377,6 +2007,9 @@ def build_sidebar():
         asset=asset, global_exchange=global_exchange,
         start_date=start_date, end_date=end_date, dates_ok=dates_ok,
         trade_vol=trade_vol, dealer_spread=dealer_spread, hedge_fee=hedge_fee,
+        hedge_fee_taker=hedge_fee_taker, hedge_fee_maker=hedge_fee_maker,
+        maker_ratio=maker_ratio, market_depth_usd=market_depth_usd,
+        impact_penalty=impact_penalty, use_fx_proxy=use_fx_proxy,
         fx_limit_max=fx_limit_max, local_premium=local_premium,
         include_trading_fee_revenue=include_trading_fee_revenue,
         withdrawal_fee_markup_pct=withdrawal_fee_markup_pct,
@@ -1402,7 +2035,7 @@ def build_sidebar():
 
 # ---- 5.2 TAB 1 — BACKTEST ----------------------------------------------
 
-def render_tab1(cfg, data, data_err):
+def render_tab1(cfg: dict[str, Any], data: pd.DataFrame, data_err: Optional[str]) -> None:
     if data.empty:
         st.error(f"⚠️ {data_err or 'ไม่สามารถโหลดข้อมูลได้'}")
         return
@@ -1432,8 +2065,13 @@ def render_tab1(cfg, data, data_err):
         bt["Depeg_Deviation"] = 0.0
         bt["Depeg_PnL_THB"] = 0.0
         bt["Carry_Yield_THB"] = 0.0
+        # Base (Volatility x Sensitivity) + Market Impact ตาม trade_vol / depth
+        # (ประเมินทั้งวันเป็นก้อนเดียว = มองอนุรักษ์นิยมกว่าการทยอยแบ่งส่ง)
+        impact_rate = market_impact_rate(trade_vol, cfg["market_depth_usd"],
+                                         cfg["impact_penalty"])
         bt["Slippage_Cost_THB"] = (trade_vol * bt["Volatility_Pct"]
-                                   * cfg["slippage_sensitivity"] * bt["USDTHB"])
+                                   * cfg["slippage_sensitivity"] * bt["USDTHB"]
+                                   + trade_vol * impact_rate * bt["USDTHB"])
 
     if cfg["include_trading_fee_revenue"]:
         bt["Trading_Fee_Revenue_THB"] = bt["Gross_Notional_THB"] * LOCAL_TRADING_FEE_PCT
@@ -1496,30 +2134,39 @@ def render_tab1(cfg, data, data_err):
             "ถ้าเลือกช่วงเวลาสั้น"
         )
 
+    if cfg["market_depth_usd"] > 0 and cfg["impact_penalty"] > 0:
+        part = depth_participation(trade_vol, cfg["market_depth_usd"])
+        if part > 1.0:
+            st.warning(
+                f"⚠️ ปริมาณ hedge/วัน ({fmt_num(trade_vol)} USD) มากกว่า Market Depth "
+                f"ที่ตั้งไว้ ({part * 100:,.0f}% ของ depth) — โมเดล impact เชิงเส้นใช้"
+                "ไม่ได้ผลจริงเมื่อกินเกิน order book; ตัวเลข slippage เป็นเพียงขอบล่าง")
+        else:
+            st.caption(f"📉 Market impact: ออเดอร์/วันกิน depth {part * 100:,.1f}% "
+                       f"→ slippage เพิ่ม {part * cfg['impact_penalty'] * 100:,.3f}% ของ notional")
+
+    if "FX_Source" in data:
+        fx_counts = data["FX_Source"].value_counts()
+        n_stale, n_proxy = int(fx_counts.get("stale", 0)), int(fx_counts.get("proxy", 0))
+        if cfg["use_fx_proxy"] and n_proxy == 0 and n_stale > 0:
+            st.warning(
+                f"⚠️ เปิดใช้ FX proxy แล้ว แต่ไม่มีวันไหนใช้ proxy ได้ (ดึงข้อมูลไม่สำเร็จ"
+                f"หรือไม่ครอบคลุมช่วงนี้) — {n_stale} วันยังใช้เรท USD/THB ค้าง")
+        elif n_stale or n_proxy:
+            share = (n_stale + n_proxy) / max(1, len(data)) * 100
+            if n_proxy:
+                st.info(f"💱 USD/THB: {n_proxy} วัน ({n_proxy / len(data) * 100:.0f}%) "
+                        f"ใช้ {FX_PROXY['symbol']} rebase แทนเรทค้าง · "
+                        f"{n_stale} วันยังเป็นเรทค้าง")
+            else:
+                st.info(
+                    f"💱 USD/THB: {n_stale} จาก {len(data)} วัน ({share:.0f}%) เป็นเรทค้างจาก"
+                    "วันทำการล่าสุด (เสาร์-อาทิตย์/วันหยุด — คริปโตเทรด 24/7 แต่ตลาด FX ปิด) "
+                    "รายการที่ผูกกับ USD/THB ในวันเหล่านั้นจึงไม่สะท้อนการขยับของเรทจริง")
+
     # ---- ราคาเรียลไทม์ ----
     section(f"📉 ราคาเรียลไทม์ — {asset}")
-    tv_mode = st.radio(
-        "มุมมองกราฟ",
-        ["กระดานไทย (Bitkub)", "กระดานโลก (Binance)", "เทียบ 2 กระดาน"],
-        horizontal=True, key="tv_mode_bt",
-    )
-    local_sym = TV_LOCAL_SYMBOL.get(asset, f"BITKUB:{asset}THB")
-    global_sym = TV_GLOBAL_SYMBOL.get(asset, f"BINANCE:{asset}USDT")
-
-    if tv_mode == "กระดานไทย (Bitkub)":
-        render_tradingview(local_sym, "tv_bt_local", 520,
-                           studies=["RSI@tv-basicstudies"])
-    elif tv_mode == "กระดานโลก (Binance)":
-        render_tradingview(global_sym, "tv_bt_global", 520,
-                           studies=["RSI@tv-basicstudies"])
-    else:
-        g1, g2 = st.columns(2)
-        with g1:
-            st.caption(f"🇹🇭 ราคาจริงฝั่งไทย — `{local_sym}`")
-            render_tradingview(local_sym, "tv_cmp_local", 420)
-        with g2:
-            st.caption(f"🌐 ราคาโลก — `{global_sym}`")
-            render_tradingview(global_sym, "tv_cmp_global", 420)
+    render_tv_panel(asset)
 
     # ---- Performance ----
     section("📈 Performance Summary")
@@ -1662,6 +2309,15 @@ def render_tab1(cfg, data, data_err):
             trade_vol_usd_per_day=trade_vol,
             dealer_spread_pct=cfg["dealer_spread"] * 100,
             hedge_fee_pct=hedge_fee * 100,
+            hedge_fee_taker_pct=cfg["hedge_fee_taker"] * 100,
+            hedge_fee_maker_pct=cfg["hedge_fee_maker"] * 100,
+            maker_ratio_pct=cfg["maker_ratio"] * 100,
+            market_depth_usd=cfg["market_depth_usd"],
+            impact_penalty_pct=cfg["impact_penalty"] * 100,
+            fx_proxy_used=cfg["use_fx_proxy"],
+            fx_days_official=int((data["FX_Source"] == "official").sum()),
+            fx_days_proxy=int((data["FX_Source"] == "proxy").sum()),
+            fx_days_stale=int((data["FX_Source"] == "stale").sum()),
             fx_limit_usd_per_month=cfg["fx_limit_max"],
             local_premium_pct=cfg["local_premium"] * 100,
             ktb_fx_benefit_bps=cfg["ktb_fx_spread_bps"],
@@ -1681,7 +2337,7 @@ def render_tab1(cfg, data, data_err):
 
 # ---- 5.3 TAB 2 — LIQUIDITY & CAPITAL PLANNER ---------------------------
 
-def render_tab2(cfg, data, data_err):
+def render_tab2(cfg: dict[str, Any], data: pd.DataFrame, data_err: Optional[str]) -> None:
     st.markdown(
         "ตอบคำถามที่ผู้บริหารถามจริง:\n\n"
         "> **\"ถ้าธุรกรรมเดือนละ X ล้าน ต้องดำรงเหรียญเท่าไหร่ เงินสดเท่าไหร่ "
@@ -1943,7 +2599,8 @@ def render_tab2(cfg, data, data_err):
 
 # ---- 5.4 TAB 3 — TIME-TRAVEL ORDER SIMULATOR ---------------------------
 
-def render_tab3(cfg, data, data_err):
+@_fragment
+def render_tab3(cfg: dict[str, Any], data: pd.DataFrame, data_err: Optional[str]) -> None:
     st.markdown(
         "### 🛒 Time-Travel Order Journey\n"
         "จำลองสถานการณ์จริง: **\"เมื่อลูกค้าส่งคำสั่งซื้อ/ขาย "
@@ -1992,6 +2649,8 @@ def render_tab3(cfg, data, data_err):
         hedge_fee=cfg["hedge_fee"],
         fx_limit=cfg["fx_limit_max"],
         slip_sens=cfg["slippage_sensitivity"],
+        market_depth_usd=cfg["market_depth_usd"],
+        impact_penalty=cfg["impact_penalty"],
         include_fee_rev=cfg["include_trading_fee_revenue"],
         wd_markup=cfg["withdrawal_fee_markup_pct"],
         wd_fee_per_coin=WITHDRAWAL_FEE_TABLE.get(asset, 0.0),
@@ -2181,7 +2840,7 @@ def render_tab3(cfg, data, data_err):
             )
             st.session_state.sim_signature = signature
             st.session_state.sim_steps = []
-            st.rerun()
+            _rerun_fragment()
 
         if send:
             steps, _rec = execute_order(sim, side_key, float(order_amt),
@@ -2193,7 +2852,7 @@ def render_tab3(cfg, data, data_err):
                 sim["current_date"] = pd.to_datetime(np.random.choice(valid_dates))
             else:
                 sim["current_date"] = pd.to_datetime(data.index[-1])
-            st.rerun()
+            _rerun_fragment()
 
         if run_batch:
             rng = np.random.default_rng(int(seed))
@@ -2218,7 +2877,7 @@ def render_tab3(cfg, data, data_err):
 
             sim["current_date"] = pd.to_datetime(chosen_dates[-1])
             st.session_state.sim_steps = last_steps
-            st.rerun()
+            _rerun_fragment()
 
     with right:
         section("🔎 เส้นทางหลังบ้านของออเดอร์ล่าสุด")
@@ -2368,7 +3027,7 @@ def render_tab3(cfg, data, data_err):
 
 # ---- 5.5 MAIN -----------------------------------------------------------
 
-def main():
+def main() -> None:
     st.set_page_config(
         page_title="XSpring Dealer Suite",
         page_icon="\u267b\ufe0f",
@@ -2384,7 +3043,8 @@ def main():
         data, data_err = pd.DataFrame(), "ช่วงวันที่ไม่ถูกต้อง"
     else:
         data, data_err = fetch_price_data(cfg["asset"], cfg["start_date"],
-                                          cfg["end_date"])
+                                          cfg["end_date"],
+                                          use_fx_proxy=cfg["use_fx_proxy"])
 
     tab1, tab2, tab3 = st.tabs([
         "📊 5-Year Backtest Simulator",
@@ -2401,6 +3061,7 @@ def main():
 
     st.markdown(
         f"<div class='xs-foot'>XSpring Dealer Suite · Model v{MODEL_VERSION} · "
+        f"Config {CONFIG_INFO['sha256'] or 'built-in defaults'} · "
         "Planning model เพื่อการวางแผนภายในเท่านั้น "
         "ไม่ใช่เครื่องมือรับรอง compliance</div>",
         unsafe_allow_html=True,
@@ -2410,7 +3071,7 @@ def main():
 # =========================================================================
 # ENTRY POINT
 #   Streamlit รันไฟล์นี้เป็น __main__  -> UI ทำงาน
-#   unittest `import PPX`              -> ได้เฉพาะ LAYER 0-1 ไม่มี side effect
+#   unittest `import xspring_dealer_suite`              -> ได้เฉพาะ LAYER 0-1 ไม่มี side effect
 # =========================================================================
 
 if __name__ == "__main__":
