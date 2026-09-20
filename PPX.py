@@ -21,6 +21,7 @@ UI ถูกเรียกใต้ `if __name__ == "__main__"` เท่าน
 MODEL_VERSION / CHANGELOG
 -------------------------
 v1.5.11             + แก้ Vol ผิดหน่วย (yfinance Volume ของคริปโตเป็น USD อยู่แล้ว ไม่ต้องคูณราคาอีก)
+v1.5.12             + ขยายพื้นที่คลิกของแถวเหรียญให้คลุมทั้งแถว (กว้าง+สูง 100%) คลิกตรงไหนก็เปลี่ยนเหรียญ/กราฟ/ข้อมูลทันที
 v1.5.10             + แก้ราคาซ้อนทับ (จัดราคา/% เป็นคอลัมน์ขวาซ้อน 2 บรรทัด, โลโก้ไม่ถูกบีบ) และแท็บ "ปริมาณ" แสดง Vol เป็นบาท
 v1.5.9              + แก้ดีไซน์รายการเหรียญ (Market) ให้เหมือน Bitkub: วาดทั้งแถวเป็น HTML
                       + ปุ่มดาว/ปุ่มเลือกเหรียญเป็นปุ่มโปร่งใสวางทับ โดยจับด้วย class `st-key-*`
@@ -55,7 +56,7 @@ from typing import Any, Mapping, Optional
 import numpy as np
 import pandas as pd
 
-MODEL_VERSION = "1.5.11"
+MODEL_VERSION = "1.5.12"
 
 try:
     import yaml
@@ -1246,6 +1247,16 @@ THEME_CSS = """
         padding: 0 !important; opacity: 0 !important; cursor: pointer;
     }
 
+    /* ทำให้ overlay คลุมทั้งแถวจริง ๆ: กว้าง+สูง 100% ทุกชั้นของ wrapper ปุ่ม */
+    [class*="st-key-fav_"] > div, [class*="st-key-sel_"] > div,
+    [class*="st-key-fav_"] .stButton, [class*="st-key-sel_"] .stButton,
+    [class*="st-key-fav_"] [data-testid="stButton"], [class*="st-key-sel_"] [data-testid="stButton"] {
+        width: 100% !important; height: 100% !important; margin: 0 !important; padding: 0 !important;
+    }
+    [class*="st-key-fav_"] button, [class*="st-key-sel_"] button {
+        display: block !important; border: none !important; background: transparent !important;
+    }
+    [class*="st-key-mkrow_"] .mk-row, [class*="st-key-mkrow_"] .mk-row * { pointer-events: none; }
     .mk-head, .mk-row { display: flex; align-items: center; }
     .mk-head { font-size: .72rem; color: #848e9c; padding: 6px 8px 6px 0; }
     .mk-row { padding: 8px 8px 8px 0; }
