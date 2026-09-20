@@ -20,17 +20,21 @@ UI ถูกเรียกใต้ `if __name__ == "__main__"` เท่าน
 
 MODEL_VERSION / CHANGELOG
 -------------------------
-v1.5.25             + [FIX] แก้บั๊กกดแถวเหรียญใน Wallet แล้วไม่ไปหน้าเทรด (เพิ่ม CSS ปุ่มโปร่งใสกลับเข้ามา, อัปเดต JS Injection ให้บังคับสลับแท็บได้ 100% ทุกการคลิกโดยการเลี่ยงระบบ Cache)
-v1.5.24             + [FEATURE] กดเหรียญใน Wallet Tab 4 แล้ววาร์ปไปหน้าเทรด (Exchange UI Simulator Tab 3) พร้อมเปลี่ยนกราฟอัตโนมัติ
-                    + [FIX] ซ่อมรูปโลโก้ LINK (Chainlink) ที่พังจากเว็บต้นทาง
+v1.5.26             + [FIX] รวม Patch จาก Claude:
+                      1. อัปเดตระบบ Logo เป็น Base64 SVG + Multi-layer Background (ป้องกันภาพเสีย)
+                      2. แก้ CSS `pointer-events: none !important` ให้ปุ่มล่องหนทำงานได้ 100%
+                      3. ปรับ JS Tab-Switcher ให้เลี่ยง Cache ด้วยการใส่ UUID และชี้เป้าแม่นยำ
+                      4. กันกระเป๋าตังค์ (customer_thb/coins) ถูกล้างเมื่อ Model Reset
+                      5. ลบบั๊กหักเงินซ้ำซ้อนใน tab3
+v1.5.24             + [FEATURE] กดเหรียญใน Wallet Tab 4 แล้ววาร์ปไปหน้าเทรด (Exchange UI Simulator Tab 3)
 v1.5.23             + [UI] จัดระเบียบ Tab 4 (Wallet): ลบปุ่ม Header และวงเงินต่อวันออกให้ดูสะอาดขึ้น, แก้โลโก้ THB ให้เป็นธงชาติไทยที่ถูกต้อง
-v1.5.22             + [UI] อัปเดตหน้า Wallet: ลบไอคอน 👁️ ออกจากมูลค่าทั้งหมด
-v1.5.21             + [FIX] แก้ไขบั๊ก Streamlit เรนเดอร์ HTML ออกมาเป็นตัวอักษรดิบ
 v1.5.20             + [FEATURE] เพิ่มระบบ "กระเป๋าเงิน" (Wallet Tab 4) สไตล์ Bitkub
+v1.5.18             + [FEATURE] เพิ่มกราฟราคา 3D แบบ Interactive ใน Tab 1
 """
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import math
@@ -46,7 +50,7 @@ from typing import Any, Mapping, Optional
 import numpy as np
 import pandas as pd
 
-MODEL_VERSION = "1.5.25"
+MODEL_VERSION = "1.5.26"
 
 try:
     import yaml
@@ -113,20 +117,12 @@ COIN_NAMES = {
 # ใช้ Base64 SVG ธงชาติไทยที่ถูกต้อง (แดง-ขาว-น้ำเงิน-ขาว-แดง)
 THB_LOGO_SVG = "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxMDAgMTAwIj48Y2xpcFBhdGggaWQ9ImMiPjxjaXJjbGUgY3g9IjUwIiBjeT0iNTAiIHI9IjUwIi8+PC9jbGlwUGF0aD48ZyBjbGlwLXBhdGg9InVybCgjYykiPjxyZWN0IHdpZHRoPSIxMDAiIGhlaWdodD0iMTciIGZpbGw9IiNFRDFDMjQiLz48cmVjdCB5PSIxNyIgd2lkdGg9IjEwMCIgaGVpZ2h0PSIxNyIgZmlsbD0iI2ZmZiIvPjxyZWN0IHk9IjM0IiB3aWR0aD0iMTAwIiBoZWlnaHQ9IjMyIiBmaWxsPSIjMjQxRDRGIi8+PHJlY3QgeT0iNjYiIHdpZHRoPSIxMDAiIGhlaWdodD0iMTciIGZpbGw9IiNmZmYiLz48cmVjdCB5PSI4MyIgd2lkdGg9IjEwMCIgaGVpZ2h0PSIxNyIgZmlsbD0iI0VEMUMyNCIvPjwvZz48L3N2Zz4="
 
-COIN_LOGOS = {
-    "BTC": "https://assets.coingecko.com/coins/images/1/small/bitcoin.png",
-    "ETH": "https://assets.coingecko.com/coins/images/279/small/ethereum.png",
-    "USDT": "https://assets.coingecko.com/coins/images/325/small/Tether.png",
-    "USDC": "https://assets.coingecko.com/coins/images/6319/small/usdc.png",
-    "SOL": "https://assets.coingecko.com/coins/images/4128/small/solana.png",
-    "ADA": "https://assets.coingecko.com/coins/images/975/small/cardano.png",
-    "DOGE": "https://assets.coingecko.com/coins/images/5/small/dogecoin.png",
-    "LINK": "https://cryptologos.cc/logos/chainlink-link-logo.png",  
-    "XRP": "https://assets.coingecko.com/coins/images/44/small/xrp-symbol-white-128.png",
-    "XLM": "https://assets.coingecko.com/coins/images/100/small/Stellar_symbol_black_RGB.png",
-    "HBAR": "https://assets.coingecko.com/coins/images/3688/small/hbar.png",
-    "THB": THB_LOGO_SVG,
-}
+COIN_LOGOS = {s: f"https://cdn.jsdelivr.net/gh/spothq/cryptocurrency-icons@master/128/color/{s.lower()}.png" for s in SUPPORTED_ASSETS}
+COIN_LOGOS["THB"] = THB_LOGO_SVG
+
+_LOGO_BG = {"BTC": "#F7931A", "ETH": "#627EEA", "SOL": "#9945FF", "DOGE": "#C2A633",
+            "ADA": "#0033AD", "HBAR": "#3a3a3a", "LINK": "#2A5ADA", "XLM": "#14B6E7",
+            "XRP": "#23292F", "USDT": "#26A17B", "USDC": "#2775CA"}
 
 LOCAL_TRADING_FEE_PCT = 0.0025
 MIN_TRADE_THB = 50.0
@@ -968,6 +964,24 @@ def execute_order(
     return steps, record
 
 
+def _letter_logo(sym: str) -> str:
+    svg = (f"<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'>"
+           f"<circle cx='50' cy='50' r='50' fill='{_LOGO_BG.get(sym, '#5e6673')}'/>"
+           f"<text x='50' y='50' text-anchor='middle' dominant-baseline='central' "
+           f"font-family='Arial,sans-serif' font-size='{38 if len(sym) <= 3 else 28}' "
+           f"font-weight='700' fill='#fff'>{sym[:4]}</text></svg>")
+    return "data:image/svg+xml;base64," + base64.b64encode(svg.encode()).decode()
+
+def get_coin_logo(symbol: str) -> str:
+    return COIN_LOGOS.get(symbol) or _letter_logo(symbol)
+
+def coin_icon_html(sym: str, size: int = 28) -> str:
+    layers = f"url({get_coin_logo(sym)}),url({_letter_logo(sym)})"
+    return (f'<span style="display:inline-block;width:{size}px;height:{size}px;'
+            f'min-width:{size}px;border-radius:50%;background-color:#2b3139;'
+            f'background-image:{layers};background-size:cover;background-position:center;"></span>')
+
+
 # =========================================================================
 # LAYER 2 — DATA LAYER (network / IO / export)
 # =========================================================================
@@ -1264,7 +1278,6 @@ THEME_CSS = """
     .mk-star { width: 36px; flex-shrink: 0; text-align: center; font-size: 1.15rem; color: #5e6673; }
     .mk-star.on { color: #fcd535; }
     .mk-asset { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; }
-    .mk-asset img { width: 26px; height: 26px; min-width: 26px; flex-shrink: 0; border-radius: 50%; background: #181a20; object-fit: contain; }
     .mk-asset > div { min-width: 0; }
     .mk-sym { font-weight: 700; color: #EAECEF; font-size: .9rem; line-height: 1.15; white-space: nowrap; }
     .mk-sym span { color: #848e9c; font-weight: 500; }
@@ -1284,28 +1297,27 @@ THEME_CSS = """
     
     /* CSS สำหรับแถวกระเป๋าเงินที่กดแล้ววาร์ปได้ */
     [class*="st-key-wlrow_"] { position: relative !important; }
-    [class*="st-key-wlrow_"] > div[data-testid="stVerticalBlock"] { gap: 0 !important; padding: 0 !important; }
+    [class*="st-key-wlrow_"] [data-testid="stVerticalBlock"] { gap: 0 !important; }
     [class*="st-key-wlbtn_"] {
-        position: absolute !important;
-        top: 0 !important; left: 0 !important; right: 0 !important; bottom: 0 !important;
-        height: 100% !important; width: 100% !important; margin: 0 !important; z-index: 5 !important;
+        position: absolute !important; top: 0 !important; left: 0 !important;
+        right: 0 !important; bottom: 0 !important; width: 100% !important;
+        height: 100% !important; margin: 0 !important; z-index: 20 !important;
     }
-    [class*="st-key-wlbtn_"] * {
-        width: 100% !important; height: 100% !important; margin: 0 !important; padding: 0 !important;
-    }
+    [class*="st-key-wlbtn_"] * { width: 100% !important; height: 100% !important; margin: 0 !important; padding: 0 !important; }
     [class*="st-key-wlbtn_"] button {
         display: block !important; border: none !important; background: transparent !important;
         color: transparent !important; opacity: 0 !important; cursor: pointer !important;
     }
     .wl-tbl-row {
-        position: relative; z-index: 2; display: flex; padding: 16px; align-items: center;
-        border-bottom: 1px solid #1f2329; border-left: 1px solid #2b3139; border-right: 1px solid #2b3139; background: #181a20; pointer-events: none;
+        display: flex; padding: 16px; align-items: center; background: #181a20;
+        border-bottom: 1px solid #1f2329; border-left: 1px solid #2b3139; border-right: 1px solid #2b3139;
     }
-    .wl-tbl-row:hover { background: #2b3139; }
+    .wl-tbl-row, .wl-tbl-row * { pointer-events: none !important; }
+    [class*="st-key-wlrow_"]:hover .wl-tbl-row { background: #2b3139; }
     .wl-col-ast { flex: 2; display: flex; align-items: center; gap: 12px; color: #EAECEF; font-weight: 600; font-size: 0.9rem; }
     .wl-col-val { flex: 1.5; text-align: right; color: #EAECEF; font-size: 0.85rem; font-variant-numeric: tabular-nums; }
-    .wl-col-act { flex: 1.5; text-align: right; display: flex; justify-content: flex-end; gap: 16px; font-size: 0.8rem; font-weight: 600; pointer-events: auto; position: relative; z-index: 10; }
-    .wl-act-link { color: #0ecb81; cursor: pointer; text-decoration: none; }
+    .wl-col-act { flex: 1.5; text-align: right; display: flex; justify-content: flex-end; gap: 16px; font-size: 0.8rem; font-weight: 600; }
+    .wl-act-link { color: #0ecb81; }
 </style>
 """
 
@@ -1502,9 +1514,6 @@ def render_tv_panel(asset: str) -> None:
         with g2:
             st.caption(f"🌐 ราคาโลก — `{global_sym}`")
             render_tradingview(global_sym, f"tv_cmp_global_{asset}", 420)
-
-def get_coin_logo(symbol: str) -> str:
-    return COIN_LOGOS.get(symbol, "https://cdn-icons-png.flaticon.com/512/1490/1490844.png")
 
 def _go_to_exchange(sym: str) -> None:
     st.session_state["bt_asset"] = sym
@@ -2384,7 +2393,7 @@ def render_market_column_view(df: pd.DataFrame, mode: str, current_asset: str, u
         html = (
             f'<div class="mk-row{sel_cls}">'
             f'<div class="mk-star{" on" if star_on else ""}">{"★" if star_on else "☆"}</div>'
-            f'<div class="mk-asset"><img src="{get_coin_logo(sym)}">'
+            f'<div class="mk-asset">{coin_icon_html(sym, 26)}'
             f'<div><div class="mk-sym">{sym}<span>/THB</span></div>'
             f'<div class="mk-name">{sub}</div></div></div>'
             f'<div class="mk-right"><div class="mk-price">{p_str}</div>'
@@ -2441,8 +2450,13 @@ def render_tab3(cfg: dict[str, Any], data: pd.DataFrame, data_err: Optional[str]
     need_reset = (("sim" not in st.session_state) or st.session_state.get("sim_signature") != signature)
 
     if need_reset:
+        old_sim = st.session_state.get("sim")
         first_day = pd.to_datetime(data.index[0])
-        st.session_state.sim = sim_defaults(asset, first_day, data.loc[first_day, "Global_USD"], data.loc[first_day, "USDTHB"], target_stock_thb)
+        new_sim = sim_defaults(asset, first_day, data.loc[first_day, "Global_USD"], data.loc[first_day, "USDTHB"], target_stock_thb)
+        if isinstance(old_sim, dict):
+            new_sim["customer_thb"] = old_sim.get("customer_thb", 1_000_000.0)
+            new_sim["customer_coins"] = dict(old_sim.get("customer_coins", {}))
+        st.session_state.sim = new_sim
         st.session_state.sim_signature = signature
         st.session_state.sim_steps = []
 
@@ -2477,7 +2491,7 @@ def render_tab3(cfg: dict[str, Any], data: pd.DataFrame, data_err: Optional[str]
     # --- TOP HEADER BAR ---
     top_bar_html = f"""<div class="ex-header">
         <div style="display:flex; align-items:center; gap:12px;">
-            <img src="{get_coin_logo(asset)}" onerror="this.src='https://cdn-icons-png.flaticon.com/512/1490/1490844.png'" style="width:40px; height:40px; border-radius:50%; background:#181a20; padding:2px;">
+            {coin_icon_html(asset, 40)}
             <div class="ex-stat">
                 <span style="font-size:1.4rem; font-weight:700; color:#EAECEF;">{asset}/THB</span>
                 <span style="font-size:0.8rem; font-weight:600;" class="{pct_cls}">{pct_txt}</span>
@@ -2625,12 +2639,6 @@ def render_tab3(cfg: dict[str, Any], data: pd.DataFrame, data_err: Optional[str]
             steps, _rec = execute_order(sim, side_key, float(order_amt), current_date_val, data.loc[current_date_val], ctx)
             st.session_state.sim_steps = steps
             
-            sim["customer_thb"] = sim.get("customer_thb", 1000000.0)
-            if side_key == "buy":
-                sim["customer_thb"] -= float(order_amt)
-            else:
-                sim["customer_thb"] += float(order_amt)
-
             valid_dates = data[data.index >= current_date_val].index
             if len(valid_dates) > 1:
                 sim["current_date"] = pd.to_datetime(np.random.choice(valid_dates))
@@ -2657,12 +2665,6 @@ def render_tab3(cfg: dict[str, Any], data: pd.DataFrame, data_err: Optional[str]
                 amt = float(rng.lognormal(mu, sigma))
                 s_ = "buy" if rng.random() < p_buy else "sell"
                 last_steps, _rec = execute_order(sim, s_, max(amt, MIN_TRADE_THB), d, data.loc[d], ctx)
-                
-                sim["customer_thb"] = sim.get("customer_thb", 1000000.0)
-                if s_ == "buy":
-                    sim["customer_thb"] -= max(amt, MIN_TRADE_THB)
-                else:
-                    sim["customer_thb"] += max(amt, MIN_TRADE_THB)
 
             sim["current_date"] = pd.to_datetime(chosen_dates[-1])
             st.session_state.sim_steps = last_steps
@@ -2698,7 +2700,7 @@ def render_tab4(cfg: dict[str, Any], data: pd.DataFrame, market_df: pd.DataFrame
     total_usdt = total_thb / usdthb_current if usdthb_current > 0 else 0
     time_str = pd.Timestamp.now(tz="Asia/Bangkok").strftime("%H:%M:%S")
 
-    # Header (ไม่มีปุ่มฝาก/ถอน/ประวัติ ตามที่ร้องขอ)
+    # Header
     st.markdown(
         f'<div style="margin-bottom:20px;">'
         f'<h2 style="margin:0; color:#EAECEF; font-size:1.8rem;">กระเป๋าเงิน</h2>'
@@ -2758,13 +2760,12 @@ def render_tab4(cfg: dict[str, Any], data: pd.DataFrame, market_df: pd.DataFrame
         if search_q and search_q.lower() not in a["sym"].lower() and search_q.lower() not in COIN_NAMES.get(a["sym"], "").lower():
             continue
 
-        logo = get_coin_logo(a["sym"])
         sub_name = COIN_NAMES.get(a["sym"], "Thai Baht")
 
         row_html = (
             f'<div class="wl-tbl-row">'
             f'<div class="wl-col-ast">'
-            f'<img src="{logo}" style="width:28px; height:28px; border-radius:50%; background:#181a20; padding:2px;">'
+            f'{coin_icon_html(a["sym"], 28)}'
             f'<div>'
             f'<div style="line-height:1.2;">{a["sym"]}</div>'
             f'<div style="font-size:0.7rem; color:#848e9c; font-weight:500;">{sub_name}</div>'
@@ -2784,7 +2785,6 @@ def render_tab4(cfg: dict[str, Any], data: pd.DataFrame, market_df: pd.DataFrame
         with st.container(key=f"wlrow_{a['sym']}"):
             st.markdown(row_html, unsafe_allow_html=True)
             if a["sym"] != "THB":
-                # กดที่เหรียญ (ปุ่มล่องหน) แล้วจะตั้งค่าเปลี่ยนเหรียญพร้อมสลับแท็บ
                 st.button("go", key=f"wlbtn_{a['sym']}", on_click=_go_to_exchange, args=(a["sym"],))
 
     # ปิดขอบล่างของตาราง
@@ -2840,23 +2840,26 @@ def main() -> None:
     # -------------------------------------------------------------
     tab_idx = st.session_state.get("force_tab_switch")
     if tab_idx is not None:
-        unique_id = uuid.uuid4().hex
         js = f"""
-        <div id="tab-switcher-{unique_id}"></div>
         <script>
-            let attempts = 0;
-            let interval = setInterval(() => {{
-                let tabs = window.parent.document.querySelectorAll('button[data-baseweb="tab"], button[role="tab"]');
-                if (tabs.length > {tab_idx}) {{
-                    tabs[{tab_idx}].click();
-                    clearInterval(interval);
-                }}
-                if (++attempts > 20) clearInterval(interval);
-            }}, 50);
+        // {uuid.uuid4().hex}
+        (function () {{
+          var idx = {int(tab_idx)}, tries = 0;
+          function go() {{
+            var list = window.parent.document.querySelector('[data-baseweb="tab-list"]');
+            var tabs = list ? list.querySelectorAll('button[role="tab"]') : [];
+            if (tabs.length > idx) {{
+              if (tabs[idx].getAttribute('aria-selected') !== 'true') tabs[idx].click();
+            }} else if (tries++ < 30) {{
+              setTimeout(go, 100);
+            }}
+          }}
+          go();
+        }})();
         </script>
         """
         components.html(js, height=0, width=0)
-        del st.session_state["force_tab_switch"]
+        st.session_state["force_tab_switch"] = None
 
 
 if __name__ == "__main__":
