@@ -20,12 +20,9 @@ UI ถูกเรียกใต้ `if __name__ == "__main__"` เท่าน
 
 MODEL_VERSION / CHANGELOG
 -------------------------
-v1.5.2              + ลบฟังก์ชัน Orderbook และเหรียญที่ไม่ได้รองรับโลโก้ออกเพื่อลดการประมวลผลเครื่อง
-v1.5.1              + แก้ไขรูปภาพเหรียญไม่แสดง (เปลี่ยน CDN เป็น jsdelivr cryptocurrency-icons)
-                      + เพิ่ม Custom CSS เต็มรูปแบบสำหรับ UI สไตล์ Pro Exchange 
-v1.5.0              + Redesign Tab 3 (Simulator) เป็นรูปแบบ Pro Exchange Trading Terminal
-                      (มี Top Bar, Market List, Order Book จำลอง และ Order Entry Panel)
-                      + ปรับใช้ Dark Theme ขั้นสูง (Deep Navy/Black)
+v1.5.3              + ย้าย Market Overview (รายการโปรด, ปริมาณ, % เพิ่ม, % ลด) มาไว้ที่คอลัมน์ซ้ายของ Tab 3
+                      + ปรับใช้ CoinGecko CDN แก้ปัญหาโลโก้เหรียญไม่ขึ้น (รวม HBAR)
+                      + ถอด Orderbook และเหรียญที่ไม่มีข้อมูลทิ้งเพื่อความเบาของเครื่อง
 """
 
 from __future__ import annotations
@@ -45,7 +42,7 @@ from typing import Any, Mapping, Optional
 import numpy as np
 import pandas as pd
 
-MODEL_VERSION = "1.5.2"
+MODEL_VERSION = "1.5.3"
 
 try:
     import yaml
@@ -101,6 +98,28 @@ SUPPORTED_ASSETS = [
     "BTC", "ETH", "SOL", "DOGE", "ADA", "HBAR", "LINK", "XLM", "XRP", "USDT", "USDC",
 ]
 STABLECOINS = ["USDT", "USDC"]
+
+COIN_NAMES = {
+    "BTC": "Bitcoin", "ETH": "Ethereum", "SOL": "Solana",
+    "DOGE": "Dogecoin", "ADA": "Cardano", "HBAR": "Hedera",
+    "LINK": "Chainlink", "XLM": "Stellar", "XRP": "XRP",
+    "USDT": "Tether", "USDC": "USD Coin", "THB": "Thai Baht"
+}
+
+COIN_LOGOS = {
+    "BTC": "https://assets.coingecko.com/coins/images/1/small/bitcoin.png",
+    "ETH": "https://assets.coingecko.com/coins/images/279/small/ethereum.png",
+    "USDT": "https://assets.coingecko.com/coins/images/325/small/Tether.png",
+    "USDC": "https://assets.coingecko.com/coins/images/6319/small/usdc.png",
+    "SOL": "https://assets.coingecko.com/coins/images/4128/small/solana.png",
+    "ADA": "https://assets.coingecko.com/coins/images/975/small/cardano.png",
+    "DOGE": "https://assets.coingecko.com/coins/images/5/small/dogecoin.png",
+    "LINK": "https://assets.coingecko.com/coins/images/877/small/chainlinknew-bg.png",
+    "XRP": "https://assets.coingecko.com/coins/images/44/small/xrp-symbol-white-128.png",
+    "XLM": "https://assets.coingecko.com/coins/images/100/small/Stellar_symbol_black_RGB.png",
+    "HBAR": "https://assets.coingecko.com/coins/images/3688/small/hbar.png",
+    "THB": "https://cdn-icons-png.flaticon.com/512/197/197583.png",
+}
 
 LOCAL_TRADING_FEE_PCT = 0.0025
 MIN_TRADE_THB = 50.0
@@ -1183,9 +1202,9 @@ THEME_CSS = """
 
     .mk-row { display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #2b3139; cursor: pointer; transition: background 0.2s; }
     .mk-row:hover { background: #2b3139; }
-    .mk-coin { display: flex; align-items: center; gap: 8px; }
-    .mk-price { font-size: 0.85rem; font-weight: 600; color: #EAECEF; text-align: right; }
-    .mk-vol { font-size: 0.75rem; text-align: right; }
+    .mk-coin { display: flex; align-items: center; gap: 10px; }
+    .mk-price { font-size: 0.9rem; font-weight: 700; color: #EAECEF; text-align: right; }
+    .mk-vol { font-size: 0.8rem; text-align: right; }
 
     .oe-tabs { display: flex; gap: 16px; border-bottom: 1px solid #2b3139; padding-bottom: 8px; margin-bottom: 16px; }
     .oe-tab { font-size: 0.9rem; font-weight: 600; color: #848e9c; cursor: pointer; }
@@ -1374,28 +1393,6 @@ def render_tradingview(symbol, container_id, height=500, interval="D", studies=N
     </script>"""
     components.html(html, height=height + 8)
 
-def render_market_table(df: pd.DataFrame, mode: str):
-    if df.empty:
-        st.info("ไม่มีข้อมูลตลาดในขณะนี้")
-        return
-    if mode == "favorite":
-        view = df[df["is_favorite"]].sort_values("volume", ascending=False)
-    elif mode == "volume":
-        view = df.sort_values("volume", ascending=False)
-    elif mode == "top_gain":
-        view = df.sort_values("pct_change", ascending=False)
-    elif mode == "top_loss":
-        view = df.sort_values("pct_change", ascending=True)
-    else:
-        view = df
-    for _, row in view.head(15).iterrows():
-        color = "#0ecb81" if row["pct_change"] >= 0 else "#f6465d"
-        c1, c2, c3 = st.columns([2, 2, 2])
-        c1.markdown(f"**{row['symbol']}**")
-        c2.markdown(f"{row['price_usd']:,.4f}")
-        c3.markdown(f"<span style='color:{color}'>{row['pct_change']:+.2f}%</span> · {row['volume']:,.0f}", unsafe_allow_html=True)
-
-@_fragment
 def render_tv_panel(asset: str) -> None:
     tv_mode = st.radio(
         "มุมมองกราฟ",
@@ -1421,9 +1418,7 @@ def render_tv_panel(asset: str) -> None:
             render_tradingview(global_sym, "tv_cmp_global", 420)
 
 def get_coin_logo(symbol: str) -> str:
-    if symbol == "THB":
-        return "https://cdn-icons-png.flaticon.com/512/197/197583.png"
-    return f"https://cdn.jsdelivr.net/gh/atomiclabs/cryptocurrency-icons@1a63530be6e374711a8554f31b17e4cb92c25fa5/32/color/{symbol.lower()}.png"
+    return COIN_LOGOS.get(symbol, "https://cdn-icons-png.flaticon.com/512/1490/1490844.png")
 
 # =========================================================================
 # LAYER 4 — AUDIT TRAIL
@@ -1859,7 +1854,7 @@ def build_sidebar() -> dict[str, Any]:
 
 # ---- 5.2 TAB 1 — BACKTEST ----------------------------------------------
 
-def render_tab1(cfg: dict[str, Any], data: pd.DataFrame, data_err: Optional[str], market_df: pd.DataFrame) -> None:
+def render_tab1(cfg: dict[str, Any], data: pd.DataFrame, data_err: Optional[str]) -> None:
     if data.empty:
         st.error(f"⚠️ {data_err or 'ไม่สามารถโหลดข้อมูลได้'}")
         return
@@ -1947,65 +1942,11 @@ def render_tab1(cfg: dict[str, Any], data: pd.DataFrame, data_err: Optional[str]
     dd_pct = dd_series.min() * 100
     dd_pct = 0.0 if pd.isna(dd_pct) else dd_pct
 
-    st.success(f"✅ โหลดข้อมูล **{asset}** สำเร็จ "
-               f"({total_days} วัน | เทรดได้จริง {traded_days} วัน)")
-    if total_days < RISK_SAMPLE_WARN_DAYS:
-        st.warning(
-            f"⚠️ ช่วงข้อมูลมีแค่ {total_days} วัน ({RISK_SAMPLE_WARN_DAYS} วันขึ้นไป"
-            "จึงจะเรียกว่านิ่งพอสำหรับสรุปผล) ตัวเลข P&L/สถิติด้านล่างอาจแกว่งแรง"
-            "ถ้าเลือกช่วงเวลาสั้น"
-        )
-
-    if cfg["market_depth_usd"] > 0 and cfg["impact_penalty"] > 0:
-        part = depth_participation(trade_vol, cfg["market_depth_usd"])
-        if part > 1.0:
-            st.warning(
-                f"⚠️ ปริมาณ hedge/วัน ({fmt_num(trade_vol)} USD) มากกว่า Market Depth "
-                f"ที่ตั้งไว้ ({part * 100:,.0f}% ของ depth) — โมเดล impact เชิงเส้นใช้"
-                "ไม่ได้ผลจริงเมื่อกินเกิน order book; ตัวเลข slippage เป็นเพียงขอบล่าง")
-        else:
-            st.caption(f"📉 Market impact: ออเดอร์/วันกิน depth {part * 100:,.1f}% "
-                       f"→ slippage เพิ่ม {part * cfg['impact_penalty'] * 100:,.3f}% ของ notional")
-
-    if "FX_Source" in data:
-        fx_counts = data["FX_Source"].value_counts()
-        n_stale, n_proxy = int(fx_counts.get("stale", 0)), int(fx_counts.get("proxy", 0))
-        if cfg["use_fx_proxy"] and n_proxy == 0 and n_stale > 0:
-            st.warning(
-                f"⚠️ เปิดใช้ FX proxy แล้ว แต่ไม่มีวันไหนใช้ proxy ได้ (ดึงข้อมูลไม่สำเร็จ"
-                f"หรือไม่ครอบคลุมช่วงนี้) — {n_stale} วันยังใช้เรท USD/THB ค้าง")
-        elif n_stale or n_proxy:
-            share = (n_stale + n_proxy) / max(1, len(data)) * 100
-            if n_proxy:
-                st.info(f"💱 USD/THB: {n_proxy} วัน ({n_proxy / len(data) * 100:.0f}%) "
-                        f"ใช้ {FX_PROXY['symbol']} rebase แทนเรทค้าง · "
-                        f"{n_stale} วันยังเป็นเรทค้าง")
-            else:
-                st.info(
-                    f"💱 USD/THB: {n_stale} จาก {len(data)} วัน ({share:.0f}%) เป็นเรทค้างจาก"
-                    "วันทำการล่าสุด (เสาร์-อาทิตย์/วันหยุด — คริปโตเทรด 24/7 แต่ตลาด FX ปิด) "
-                    "รายการที่ผูกกับ USD/THB ในวันเหล่านั้นจึงไม่สะท้อนการขยับของเรทจริง")
+    st.success(f"✅ โหลดข้อมูล **{asset}** สำเร็จ ({total_days} วัน | เทรดได้จริง {traded_days} วัน)")
 
     # ---- ราคาเรียลไทม์ ----
     section(f"📉 ราคาเรียลไทม์ — {asset}")
     render_tv_panel(asset)
-
-    # ---- Market Overview ----
-    section("🌍 ภาพรวมตลาด (Market Overview)")
-    favorites = st.session_state.get("favorite_tickers", [])
-    st.multiselect(
-        "⭐ เลือกเหรียญที่ต้องการปักเป็นรายการโปรด",
-        SUPPORTED_ASSETS, key="favorite_tickers",
-    )
-    sub1, sub2, sub3, sub4 = st.tabs(["⭐ รายการโปรด", "ปริมาณ 24 ชม.", "% เพิ่มสูงสุด", "% ลดสูงสุด"])
-    with sub1:
-        render_market_table(market_df, "favorite")
-    with sub2:
-        render_market_table(market_df, "volume")
-    with sub3:
-        render_market_table(market_df, "top_gain")
-    with sub4:
-        render_market_table(market_df, "top_loss")
 
     # ---- Performance ----
     section("📈 Performance Summary")
@@ -2035,17 +1976,11 @@ def render_tab1(cfg: dict[str, Any], data: pd.DataFrame, data_err: Optional[str]
     metric_card(r3[1], "FX Limit Hit", f"{limit_hit_days} วัน",
                 -1 if limit_hit_days else 0, f"{hit_pct:.1f}% ของช่วงเวลา")
     if asset in STABLECOINS:
-        metric_card(r3[2], "Avg Depeg Deviation",
-                    f"{bt['Depeg_Deviation'].mean() * 100:+.3f}%")
-        metric_card(r3[3], "Total Carry Yield",
-                    fmt_baht(traded["Carry_Yield_THB"].sum()),
-                    traded["Carry_Yield_THB"].sum())
+        metric_card(r3[2], "Avg Depeg Deviation", f"{bt['Depeg_Deviation'].mean() * 100:+.3f}%")
+        metric_card(r3[3], "Total Carry Yield", fmt_baht(traded["Carry_Yield_THB"].sum()), traded["Carry_Yield_THB"].sum())
     else:
-        metric_card(r3[2], "Avg Daily Volatility",
-                    f"{bt['Volatility_Pct'].mean() * 100:.2f}%")
-        metric_card(r3[3], "Total Slippage Cost",
-                    fmt_baht(traded["Slippage_Cost_THB"].sum()),
-                    -abs(traded["Slippage_Cost_THB"].sum()))
+        metric_card(r3[2], "Avg Daily Volatility", f"{bt['Volatility_Pct'].mean() * 100:.2f}%")
+        metric_card(r3[3], "Total Slippage Cost", fmt_baht(traded["Slippage_Cost_THB"].sum()), -abs(traded["Slippage_Cost_THB"].sum()))
 
     # ---- Waterfall ----
     section("💧 Revenue & Cost Waterfall")
@@ -2060,8 +1995,7 @@ def render_tab1(cfg: dict[str, Any], data: pd.DataFrame, data_err: Optional[str]
         wf_values.append(traded["KTB_FX_Benefit_THB"].sum())
     if asset in STABLECOINS:
         wf_labels += ["Depeg Arbitrage", "Carry Yield"]
-        wf_values += [traded["Depeg_PnL_THB"].sum(),
-                      traded["Carry_Yield_THB"].sum()]
+        wf_values += [traded["Depeg_PnL_THB"].sum(), traded["Carry_Yield_THB"].sum()]
     else:
         wf_labels.append("Slippage Cost")
         wf_values.append(-traded["Slippage_Cost_THB"].sum())
@@ -2104,8 +2038,7 @@ def render_tab1(cfg: dict[str, Any], data: pd.DataFrame, data_err: Optional[str]
             marker=dict(color="#f6465d", size=5, symbol="x"),
         ))
     fig.update_layout(
-        title=(f"{asset} @ {cfg['global_exchange']} · "
-               f"{cfg['start_date']} → {cfg['end_date']}"),
+        title=(f"{asset} @ {cfg['global_exchange']} · {cfg['start_date']} → {cfg['end_date']}"),
         template="plotly_dark", hovermode="x unified", height=480,
         margin=dict(t=50, b=20), yaxis_title="THB",
         legend=dict(orientation="h", y=1.02, yanchor="bottom"),
@@ -2140,39 +2073,6 @@ def render_tab1(cfg: dict[str, Any], data: pd.DataFrame, data_err: Optional[str]
 
         preview = bt[cols].sort_index(ascending=False).head(100)
         st.dataframe(preview, height=400, **WIDE)
-
-        bt_assumptions = dict(
-            asset=asset,
-            global_exchange=cfg["global_exchange"],
-            start_date=str(cfg["start_date"]),
-            end_date=str(cfg["end_date"]),
-            trade_vol_usd_per_day=trade_vol,
-            dealer_spread_pct=cfg["dealer_spread"] * 100,
-            hedge_fee_pct=hedge_fee * 100,
-            hedge_fee_taker_pct=cfg["hedge_fee_taker"] * 100,
-            hedge_fee_maker_pct=cfg["hedge_fee_maker"] * 100,
-            maker_ratio_pct=cfg["maker_ratio"] * 100,
-            market_depth_usd=cfg["market_depth_usd"],
-            impact_penalty_pct=cfg["impact_penalty"] * 100,
-            fx_proxy_used=cfg["use_fx_proxy"],
-            fx_days_official=int((data["FX_Source"] == "official").sum()),
-            fx_days_proxy=int((data["FX_Source"] == "proxy").sum()),
-            fx_days_stale=int((data["FX_Source"] == "stale").sum()),
-            fx_limit_usd_per_month=cfg["fx_limit_max"],
-            local_premium_pct=cfg["local_premium"] * 100,
-            ktb_fx_benefit_bps=cfg["ktb_fx_spread_bps"],
-            slippage_sensitivity_pct=cfg["slippage_sensitivity"] * 100,
-        )
-        st.download_button(
-            "⬇️ ดาวน์โหลด Daily Ledger ทั้งหมด พร้อม Assumptions (CSV)",
-            to_csv_bytes_with_assumptions(
-                bt.sort_index(ascending=False), bt_assumptions,
-                f"XSpring 5Y Backtest — {asset}",
-            ),
-            f"xspring_backtest_{asset}.csv",
-            "text/csv",
-            **WIDE,
-        )
 
 
 # ---- 5.3 TAB 2 — LIQUIDITY & CAPITAL PLANNER ---------------------------
@@ -2246,49 +2146,16 @@ def render_tab2(cfg: dict[str, Any], data: pd.DataFrame, data_err: Optional[str]
                             f"{k} {norm_w[k] * 100:.0f}%" for k in ret_df.columns)
                         if price_map:
                             portfolio_price_frame = next(iter(price_map.values()))
-                    else:
-                        st.warning(
-                            f"⚠️ ข้อมูลที่ใช้ร่วมกันได้มีแค่ {len(ret_df)} วัน "
-                            f"(ต้องการอย่างน้อย {MIN_RISK_SAMPLE_DAYS} วัน) — "
-                            "ขยายช่วงเวลาในแถบซ้าย"
-                        )
 
     if rp is None:
         return
 
     usdthb_now, usdthb_is_fallback = get_reference_usdthb(portfolio_price_frame)
-    if usdthb_is_fallback:
-        st.warning(
-            f"⚠️ ดึงเรท USD/THB ล่าสุดไม่สำเร็จ — ใช้ค่าสำรอง {usdthb_now:,.2f} "
-            "ชั่วคราว ตัวเลขเพดานธุรกรรมด้านล่างจึงเป็นค่าประมาณ "
-            "ควรรีเฟรชหรือรอเครือข่ายกลับมาก่อนใช้ตัดสินใจจริง"
-        )
-    if rp.get("insufficient_sample"):
-        st.warning(
-            f"⚠️ ใช้ข้อมูลย้อนหลังแค่ {rp['n_obs']} วันในการคำนวณ VaR/ES/Haircut — "
-            f"ต่ำกว่า {RISK_SAMPLE_WARN_DAYS} วันที่ถือว่านิ่งพอสำหรับ tail risk "
-            "ตัวเลข Haircut/Safety Stock ด้านล่างอาจไม่นิ่งและเปลี่ยนแรงถ้าขยับ"
-            "ช่วงเวลาแค่นิดเดียว ควรขยายช่วง backtest ก่อนใช้ตัดสินใจเรื่องทุนจริง"
-        )
-
-    section(f"📐 โปรไฟล์ความเสี่ยงจากข้อมูลจริง — {risk_label}")
-    rk = st.columns(4)
-    metric_card(rk[0], "Ann. Volatility", f"{rp['ann_vol'] * 100:.1f}%")
-    metric_card(rk[1], "VaR 99% (1 วัน)", f"{rp['var99'] * 100:.2f}%")
-    metric_card(rk[2], "Expected Shortfall 99%", f"{rp['es99'] * 100:.2f}%")
-    metric_card(rk[3], "Worst Single Day", f"-{rp['worst'] * 100:.1f}%")
-    st.caption(f"คำนวณจากข้อมูล {rp['n_obs']} วัน "
-               "(log-return, historical method — ไม่ใช่ Monte Carlo/EVT)")
-
     settlement_days = cfg["settlement_days"]
     h_crypto = crypto_haircut(rp["es99"], settlement_days)
-    if cfg["cex_margin_asset"].startswith("Stablecoin"):
-        h_cex = cfg["cex_counterparty_haircut"]
-    else:
-        h_cex = h_crypto
+    h_cex = cfg["cex_counterparty_haircut"] if cfg["cex_margin_asset"].startswith("Stablecoin") else h_crypto
 
-    a_factor = safety_stock_factor(cfg["net_bias_pct"], cfg["flow_cv_pct"],
-                                   settlement_days, cfg["z_alpha"])
+    a_factor = safety_stock_factor(cfg["net_bias_pct"], cfg["flow_cv_pct"], settlement_days, cfg["z_alpha"])
     required_stock_thb = a_factor * cfg["monthly_volume_thb"]
 
     nc = nc_snapshot(
@@ -2302,19 +2169,9 @@ def render_tab2(cfg: dict[str, Any], data: pd.DataFrame, data_err: Optional[str]
     required_nc_total = nc["required"]
     nc_buffer_thb = nc["buffer"]
 
-    slope = (a_factor * (h_crypto + cfg["custody_rate_blended"])
-             + cfg["trading_risk_rate"] / 30.0)
-    if slope > 0:
-        rhs = (cfg["total_capital_thb"] + cfg["cex_margin_thb"] * (1 - h_cex)
-               - cfg["liab_thb"] - cfg["fixed_min_nc"])
-        v_nc_thb = max(0.0, rhs / slope)
-    else:
-        v_nc_thb = float("inf")
-
-    if a_factor > 0:
-        v_cash_thb = cfg["total_capital_thb"] / a_factor
-    else:
-        v_cash_thb = float("inf")
+    slope = (a_factor * (h_crypto + cfg["custody_rate_blended"]) + cfg["trading_risk_rate"] / 30.0)
+    v_nc_thb = max(0.0, (cfg["total_capital_thb"] + cfg["cex_margin_thb"] * (1 - h_cex) - cfg["liab_thb"] - cfg["fixed_min_nc"]) / slope) if slope > 0 else float("inf")
+    v_cash_thb = cfg["total_capital_thb"] / a_factor if a_factor > 0 else float("inf")
 
     capital_max_v_thb = min(v_nc_thb, v_cash_thb)
     fx_max_v_thb = cfg["fx_limit_max"] * usdthb_now
@@ -2326,120 +2183,72 @@ def render_tab2(cfg: dict[str, Any], data: pd.DataFrame, data_err: Optional[str]
     verdict_box(
         ok_nc,
         f"NC จริง {fmt_baht(nlc_thb)} (ต้องดำรงขั้นต่ำ {fmt_baht(required_nc_total)})",
-        f"ต้องดองเหรียญ {fmt_baht(required_stock_thb)} "
-        f"เหลือเงินสด {fmt_baht(cash_after_stock_thb)}",
+        f"ต้องดองเหรียญ {fmt_baht(required_stock_thb)} เหลือเงินสด {fmt_baht(cash_after_stock_thb)}",
         warn=(nc_buffer_thb < 0.5 * required_nc_total),
-    )
-    if cfg["hot_wallet_cap_breach"]:
-        verdict_box(False, "ฝ่าฝืนเพดาน Hot Wallet 50%",
-                    "หนี้สินลูกค้าต่ำกว่า 1,000 ลบ. ห้ามเก็บ Hot Wallet เกิน 50%")
-
-    cap_ok = cfg["monthly_volume_thb"] <= overall_max_v_thb
-    verdict_box(
-        cap_ok,
-        f"เพดานธุรกรรมสูงสุด ≈ {fmt_baht(overall_max_v_thb)}/เดือน "
-        f"(ติดที่: {binding_side})",
-        f"ทุนรองรับได้ {fmt_baht(capital_max_v_thb)}/เดือน · "
-        f"FX Limit รองรับได้ {fmt_baht(fx_max_v_thb)}/เดือน",
     )
 
     section("📊 รายละเอียดตัวเลข")
     k1 = st.columns(4)
-    metric_card(k1[0], "Required Safety Stock", fmt_baht(required_stock_thb),
-                None, f"Haircut ที่ใช้ {h_crypto * 100:.2f}%")
-    metric_card(k1[1], "เงินสดคงเหลือ", fmt_baht(cash_after_stock_thb),
-                cash_after_stock_thb)
+    metric_card(k1[0], "Required Safety Stock", fmt_baht(required_stock_thb), None, f"Haircut ที่ใช้ {h_crypto * 100:.2f}%")
+    metric_card(k1[1], "เงินสดคงเหลือ", fmt_baht(cash_after_stock_thb), cash_after_stock_thb)
     metric_card(k1[2], "Net Capital (NC) จริง", fmt_baht(nlc_thb), nlc_thb)
-    metric_card(k1[3], "NC ขั้นต่ำที่ต้องดำรง", fmt_baht(required_nc_total),
-                nc_buffer_thb,
-                f"ส่วนเกิน {fmt_baht(nc_buffer_thb, force_sign=True)}")
-
-    result_row = pd.DataFrame([{
-        "Ann_Volatility_pct": rp["ann_vol"] * 100,
-        "VaR99_pct": rp["var99"] * 100,
-        "ES99_pct": rp["es99"] * 100,
-        "Crypto_Haircut_pct": h_crypto * 100,
-        "CEX_Haircut_pct": h_cex * 100,
-        "Safety_Stock_Factor": a_factor,
-        "Required_Safety_Stock_THB": required_stock_thb,
-        "Cash_After_Stock_THB": cash_after_stock_thb,
-        "NC_Actual_THB": nlc_thb,
-        "NC_Required_THB": required_nc_total,
-        "NC_Buffer_THB": nc_buffer_thb,
-        "Max_Monthly_Volume_THB": overall_max_v_thb,
-        "Binding_Constraint": binding_side,
-    }])
-
-    planner_assumptions = dict(
-        model_version=MODEL_VERSION,
-        risk_universe=risk_label,
-        risk_sample_days=rp["n_obs"],
-        risk_sample_flagged_thin=rp.get("insufficient_sample", False),
-        net_bias_pct=cfg["net_bias_pct"] * 100,
-        flow_cv_pct=cfg["flow_cv_pct"] * 100,
-        settlement_lag_days=settlement_days,
-        confidence_level=cfg["confidence"],
-        monthly_volume_thb=cfg["monthly_volume_thb"],
-        total_capital_thb=cfg["total_capital_thb"],
-        cex_margin_thb=cfg["cex_margin_thb"],
-        liab_thb=cfg["liab_thb"],
-        is_custodian=cfg["is_custodian"],
-        fixed_min_nc_thb=cfg["fixed_min_nc"],
-        trading_risk_rate_pct=cfg["trading_risk_rate"] * 100,
-        cold_foreign_rate_pct=cfg["cold_foreign_rate"] * 100,
-        hot_wallet_pct=cfg["hot_wallet_pct"] * 100,
-        cold_domestic_split_pct=cfg["cold_domestic_split_pct"] * 100,
-        usdthb_used=usdthb_now,
-        usdthb_is_fallback=usdthb_is_fallback,
-        fx_limit_usd_per_month=cfg["fx_limit_max"],
-    )
-    st.download_button(
-        "⬇️ ดาวน์โหลดผลลัพธ์ Scenario นี้ พร้อม Assumptions (CSV)",
-        to_csv_bytes_with_assumptions(
-            result_row, planner_assumptions,
-            f"XSpring Capital Planner — {risk_label}",
-        ),
-        "xspring_capital_planner_scenario.csv",
-        "text/csv",
-        **WIDE,
-    )
-
-    with st.expander("📜 Methodology — สำหรับทีม Compliance/กฎหมายรีวิว",
-                     expanded=False):
-        st.markdown(f"""
-**Model version: `{MODEL_VERSION}`** — สูตรทั้งหมดด้านล่างอยู่ใน **LAYER 1** ของไฟล์นี้ เพื่อให้รีวิวแยกจาก UI ได้
-
-**⚠️ Disclaimer:** โมเดลนี้เป็น *planning model* สำหรับวางแผนภายใน ไม่ใช่เครื่องมือรับรอง compliance
-อัตโนมัติตามประกาศ ก.ล.ต. ทีมกฎหมาย/compliance ควรรีวิวสูตรด้านล่างเทียบกับเกณฑ์จริงก่อนใช้ตัดสินใจเชิงกำกับดูแล
-
-1. **Value-at-Risk / Expected Shortfall** — `historical method` จาก log-return ของราคาย้อนหลัง
-   `{RISK_SAMPLE_WARN_DAYS}` วันขึ้นไปถือว่าตัวอย่างนิ่งพอ (ต่ำกว่านี้ระบบจะเตือน);
-   ขั้นต่ำที่คำนวณได้คือ {MIN_RISK_SAMPLE_DAYS} วัน
-   *ข้อจำกัด:* เป็น historical เท่านั้น ยังไม่มี Monte Carlo/EVT สำหรับ tail risk
-2. **Crypto Haircut** — `h = min(ES99 × √lag_days, 95%)` จาก `crypto_haircut()`
-3. **Safety Stock Factor** — `a = (max(0,net_bias) × lag + z_α × flow_CV × √lag) / 30`
-   จาก `safety_stock_factor()` · Required Safety Stock = `a × monthly_volume_thb`
-4. **Blended Custody NC Rate** — ถ่วงน้ำหนักตามสัดส่วน Hot/Cold wallet จาก `blended_custody_rate()`:
-   Hot wallet = 100% ของมูลค่า, Cold ในประเทศ = 1%, Cold ต่างประเทศ = ตามที่กำหนด (เริ่มต้น 2%)
-5. **NC Snapshot** — `nc_snapshot()`:
-   - `NC จริง = Cash + Stock×(1−h_crypto) + CEX_Margin×(1−h_cex) − หนี้สิน`
-   - `NC ขั้นต่ำ = Fixed_Min_NC + (Trading_Risk_Rate × Daily_Volume) + (Stock × Custody_Rate)`
-6. **Hot Wallet Cap** — ห้ามเก็บ Hot Wallet เกิน 50% เมื่อหนี้สินลูกค้าต่ำกว่า 1,000 ล้านบาท
-7. **เพดานธุรกรรมสูงสุด/เดือน** — หาจาก 2 ด่านที่ตึงที่สุด: ด้านทุน/NC กับด้าน FX Limit
-   (`FX_Limit_USD × USDTHB`) แล้วเลือกค่าที่ต่ำกว่า
-        """)
+    metric_card(k1[3], "NC ขั้นต่ำที่ต้องดำรง", fmt_baht(required_nc_total), nc_buffer_thb, f"ส่วนเกิน {fmt_baht(nc_buffer_thb, force_sign=True)}")
 
 
 # ---- 5.4 TAB 3 — TIME-TRAVEL ORDER SIMULATOR ---------------------------
 
-def get_coin_logo(symbol: str) -> str:
-    if symbol == "THB":
-        return "https://cdn-icons-png.flaticon.com/512/197/197583.png"
-    return f"https://cdn.jsdelivr.net/gh/atomiclabs/cryptocurrency-icons@1a63530be6e374711a8554f31b17e4cb92c25fa5/32/color/{symbol.lower()}.png"
+def render_market_column_view(df: pd.DataFrame, mode: str, current_asset: str, usdthb: float) -> str:
+    if df.empty:
+        return '<div style="padding:16px; color:#848e9c; font-size:0.85rem; text-align:center;">ไม่มีข้อมูลตลาด</div>'
+    
+    if mode == "favorite":
+        view = df[df["is_favorite"]]
+        if view.empty:
+            return '<div style="padding:24px 8px; color:#848e9c; font-size:0.85rem; text-align:center;">ยังไม่มีรายการโปรด<br><span style="font-size:0.75rem;">(จัดการด้านล่าง)</span></div>'
+        view = view.sort_values("volume", ascending=False)
+    elif mode == "volume":
+        view = df.sort_values("volume", ascending=False)
+    elif mode == "top_gain":
+        view = df.sort_values("pct_change", ascending=False)
+    elif mode == "top_loss":
+        view = df.sort_values("pct_change", ascending=True)
+    else:
+        view = df
+
+    rows_html = []
+    for _, row in view.iterrows():
+        sym = str(row["symbol"])
+        name = COIN_NAMES.get(sym, sym)
+        p_usd = float(row["price_usd"])
+        p_thb = p_usd * usdthb
+        pct = float(row["pct_change"])
+        c_class = "ex-green" if pct >= 0 else "ex-red"
+        sign = "+" if pct >= 0 else ""
+        logo = get_coin_logo(sym)
+        
+        bg_style = "background: #2b3139; border-radius: 6px; padding: 8px 10px; margin-bottom: 4px;" if sym == current_asset else "padding: 8px 10px; border-bottom: 1px solid #1f2329; margin-bottom: 2px;"
+        p_str = f"{p_thb:,.2f}" if p_thb >= 1 else f"{p_thb:,.4f}"
+        
+        r = (
+            f'<div class="mk-row" style="{bg_style}">'
+            f'<div class="mk-coin">'
+            f'<img src="{logo}" style="width:28px; height:28px; border-radius:50%; object-fit:contain; background:#181a20; padding:1px;">'
+            f'<div style="line-height:1.2;">'
+            f'<div style="font-weight:700; color:#EAECEF; font-size:0.95rem;">{sym}</div>'
+            f'<div style="font-size:0.72rem; color:#848e9c;">{name}</div>'
+            f'</div></div>'
+            f'<div style="text-align:right;">'
+            f'<div class="mk-price" style="font-size:0.95rem; font-weight:700; color:#EAECEF;">{p_str}</div>'
+            f'<div class="mk-vol {c_class}" style="font-size:0.8rem; font-weight:600;">{sign}{pct:.2f}%</div>'
+            f'</div></div>'
+        )
+        rows_html.append(r)
+    return "".join(rows_html)
 
 @_fragment
 def render_tab3(cfg: dict[str, Any], data: pd.DataFrame, data_err: Optional[str],
-                price_lookup: Optional[dict[str, float]] = None) -> None:
+                price_lookup: Optional[dict[str, float]] = None,
+                market_df: Optional[pd.DataFrame] = None) -> None:
 
     if data.empty:
         st.error(f"⚠️ ต้องโหลดราคาจริงก่อนถึงจะจำลองได้: {data_err or 'ไม่สามารถโหลดข้อมูลได้'}")
@@ -2502,7 +2311,7 @@ def render_tab3(cfg: dict[str, Any], data: pd.DataFrame, data_err: Optional[str]
     # --- TOP HEADER BAR ---
     top_bar_html = f"""<div class="ex-header">
         <div style="display:flex; align-items:center; gap:12px;">
-            <img src="{get_coin_logo(asset)}" onerror="this.src='https://cdn-icons-png.flaticon.com/512/1490/1490844.png'" style="width:40px; height:40px; border-radius:50%; background:white; padding:2px;">
+            <img src="{get_coin_logo(asset)}" style="width:40px; height:40px; border-radius:50%; background:#181a20; padding:2px;">
             <div class="ex-stat">
                 <span style="font-size:1.4rem; font-weight:700; color:#EAECEF;">{asset}/THB</span>
                 <span style="font-size:0.8rem; font-weight:600;" class="ex-green">เปลี่ยน 24H +1.26%</span>
@@ -2516,55 +2325,35 @@ def render_tab3(cfg: dict[str, Any], data: pd.DataFrame, data_err: Optional[str]
     </div>"""
     st.markdown(top_bar_html, unsafe_allow_html=True)
 
-    # --- MAIN LAYOUT ---
-    col_left, col_center, col_right = st.columns([1.8, 5, 2.8], gap="small")
+    # --- MAIN LAYOUT (Columns: Market Overview | Chart & Tabs | Order Entry) ---
+    col_left, col_center, col_right = st.columns([2.4, 4.8, 2.8], gap="small")
 
-    # --- LEFT COLUMN: Market List ---
+    # --- LEFT COLUMN: Market Overview Tabs ---
     with col_left:
-        st.markdown('<div class="ex-panel" style="padding:12px;">', unsafe_allow_html=True)
-        st.text_input("🔍 ค้นหาสินทรัพย์", placeholder="ค้นหา...", label_visibility="collapsed")
-        st.markdown('<div style="display:flex; gap:16px; margin: 12px 0 8px 0; font-size:0.85rem; font-weight:600; color:#848e9c; border-bottom:1px solid #2b3139; padding-bottom:8px;"><span style="color:#EAECEF; border-bottom:2px solid #0ecb81; padding-bottom:6px; margin-bottom:-8px;">ทั้งหมด</span><span>รายการโปรด</span></div>', unsafe_allow_html=True)
+        st.markdown('<div style="font-size:1.05rem; font-weight:700; color:#EAECEF; margin-bottom:8px;">🌍 ภาพรวมตลาด (Market)</div>', unsafe_allow_html=True)
         
-        market_html = '<div style="height: 600px; overflow-y: auto; padding-right: 4px;">'
-        market_html += '<div style="display:flex; justify-content:space-between; font-size:0.75rem; color:#848e9c; margin-bottom:8px;"><span>สินทรัพย์</span><span>ราคาล่าสุด</span></div>'
+        m_df = market_df if market_df is not None else pd.DataFrame()
         
-        coin_info_dict = {
-            "BTC": "Bitcoin", "ETH": "Ethereum", "USDT": "Tether", "SOL": "Solana",
-            "DOGE": "Dogecoin", "ADA": "Cardano", "HBAR": "Hedera", "LINK": "Chainlink",
-            "XLM": "Stellar", "XRP": "XRP", "USDC": "USD Coin"
-        }
-        
-        for sym in SUPPORTED_ASSETS:
-            c_name = coin_info_dict.get(sym, sym)
-            p_usd = price_lookup.get(sym, spot_usd_current if sym == asset else np.random.uniform(0.1, 100))
-            p_thb = p_usd * usdthb_current
-            change = np.random.uniform(-5, 5)
-            c_class = "ex-green" if change >= 0 else "ex-red"
-            sign = "+" if change >= 0 else ""
-            
-            bg_style = "background-color: #2b3139; border-radius:4px; padding: 4px;" if sym == asset else "padding: 4px;"
-            
-            market_html += f"""<div class="mk-row" style="{bg_style}">
-                <div class="mk-coin">
-                    <img src="{get_coin_logo(sym)}" onerror="this.src='https://cdn-icons-png.flaticon.com/512/1490/1490844.png'" style="width:20px; height:20px; border-radius:50%; background:white;">
-                    <div style="line-height:1.2;"><div>{sym}</div><div style="font-size:0.7rem; color:#848e9c; font-weight:normal;">{c_name}</div></div>
-                </div>
-                <div>
-                    <div class="mk-price">{p_thb:,.2f}</div>
-                    <div class="mk-vol {c_class}">{sign}{change:.2f}%</div>
-                </div>
-            </div>"""
-        market_html += '</div></div>'
-        st.markdown(market_html, unsafe_allow_html=True)
+        sub1, sub2, sub3, sub4 = st.tabs(["⭐ โปรด", "ปริมาณ", "% เพิ่ม", "% ลด"])
+        with sub1:
+            st.markdown(render_market_column_view(m_df, "favorite", asset, usdthb_current), unsafe_allow_html=True)
+            with st.expander("⭐ เลือกเหรียญโปรด", expanded=False):
+                st.multiselect("รายการโปรด", SUPPORTED_ASSETS, key="favorite_tickers", label_visibility="collapsed")
+        with sub2:
+            st.markdown(render_market_column_view(m_df, "volume", asset, usdthb_current), unsafe_allow_html=True)
+        with sub3:
+            st.markdown(render_market_column_view(m_df, "top_gain", asset, usdthb_current), unsafe_allow_html=True)
+        with sub4:
+            st.markdown(render_market_column_view(m_df, "top_loss", asset, usdthb_current), unsafe_allow_html=True)
 
     # --- CENTER COLUMN: Chart & Timeline ---
     with col_center:
         st.markdown('<div class="ex-panel" style="padding:0; overflow:hidden; border:none; background:transparent;">', unsafe_allow_html=True)
         local_sym = TV_LOCAL_SYMBOL.get(asset, f"BITKUB:{asset}THB")
-        render_tradingview(local_sym, "tv_center", 480, studies=["MAExp@tv-basicstudies"])
+        render_tradingview(local_sym, "tv_center", 460, studies=["MAExp@tv-basicstudies"])
         st.markdown('</div>', unsafe_allow_html=True)
 
-        st.markdown('<div style="margin-top:16px;"></div>', unsafe_allow_html=True)
+        st.markdown('<div style="margin-top:14px;"></div>', unsafe_allow_html=True)
         t_route, t_ledger, t_wallet = st.tabs(["🚀 System Routing (ออเดอร์ล่าสุด)", "📒 สมุดออเดอร์ (Ledger)", "💼 Wallet & Capital"])
         
         with t_route:
@@ -2580,7 +2369,7 @@ def render_tab3(cfg: dict[str, Any], data: pd.DataFrame, data_err: Optional[str]
             else:
                 led = pd.DataFrame(sim["orders"])
                 led.index = range(1, len(led) + 1)
-                st.dataframe(led.sort_index(ascending=False), height=250, use_container_width=True)
+                st.dataframe(led.sort_index(ascending=False), height=240, use_container_width=True)
 
         with t_wallet:
             stock_thb_now = max(0.0, sim["inv_coins"].get(asset, 0.0)) * spot_usd_current * usdthb_current
@@ -2597,7 +2386,7 @@ def render_tab3(cfg: dict[str, Any], data: pd.DataFrame, data_err: Optional[str]
                 st.metric("กำไรสะสม Dealer (THB)", fmt_baht(sim["pnl_thb"], True))
                 st.metric("ออเดอร์ทั้งหมด", f"{len(sim['orders'])} รายการ")
 
-    # --- RIGHT COLUMN: Order Entry (Removed Orderbook) ---
+    # --- RIGHT COLUMN: Order Entry ---
     with col_right:
         with st.container(border=True):
             st.markdown("""<div class="oe-tabs">
@@ -2704,11 +2493,11 @@ def main() -> None:
     ])
 
     with tab1:
-        render_tab1(cfg, data, data_err, market_df)
+        render_tab1(cfg, data, data_err)
     with tab2:
         render_tab2(cfg, data, data_err)
     with tab3:
-        render_tab3(cfg, data, data_err, price_lookup=price_lookup)
+        render_tab3(cfg, data, data_err, price_lookup=price_lookup, market_df=market_df)
 
     st.markdown(
         f"<div class='xs-foot'>XSpring Dealer Suite · Model v{MODEL_VERSION} · "
