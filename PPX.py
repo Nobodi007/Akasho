@@ -20,7 +20,7 @@ UI ถูกเรียกใต้ `if __name__ == "__main__"` เท่าน
 
 MODEL_VERSION / CHANGELOG
 -------------------------
-v1.5.19             + [UI] เปลี่ยนสีเส้นกราฟ 3D (3D Price vs Volatility) เป็นแบบสีรุ้ง (Rainbow colorscale)
+v1.5.19             + [UI] ปรับกราฟ 3D ใน Tab 1 ให้เป็นจุด (Scatter) ไล่สีรุ้ง (Rainbow) แทนเส้น เพื่อความเท่และดูง่ายขึ้น
 v1.5.18             + [FEATURE] เพิ่มกราฟราคา 3D แบบ Interactive (3D Price vs Volatility vs Time) ใน Tab 1 สำหรับวิเคราะห์มิติความเคลื่อนไหวของราคา
 v1.5.17             + [FIX] แก้กราฟ TradingView ไม่เปลี่ยนตามเมื่อคลิกเหรียญ (ปรับ container_id ให้เป็น dynamic ตามชื่อเหรียญ) และเพิ่ม asset ใน signature
 v1.5.16             + [FIX] ปุ่มคลิกเลือกเหรียญในรายการตลาด (Market list) ไม่คลุมเต็มแถวจริง
@@ -1210,7 +1210,7 @@ THEME_CSS = """
     .oe-tab.active { color: #EAECEF; border-bottom: 2px solid #fcd535; padding-bottom: 6px; margin-bottom: -8px; }
     .oe-bal { display: flex; justify-content: space-between; font-size: 0.8rem; color: #848e9c; margin-bottom: 16px; }
 
-    /* ---------- Order buttons ---------- */
+    /* ---------- Order buttons (จับด้วย st-key-* แทน :contains) ---------- */
     .st-key-sim_send button { width: 100% !important; font-weight: 700; padding: 12px; color: #fff !important; border: none !important; }
     .st-key-sim_batch button { width: 100% !important; font-weight: 700; background: #fcd535 !important; color: #181a20 !important; border: none !important; }
 
@@ -2001,11 +2001,13 @@ def render_tab1(cfg: dict[str, Any], data: pd.DataFrame, data_err: Optional[str]
                 x=list(range(len(df_3d))),
                 y=df_3d["Global_USD"],
                 z=df_3d["Volatility_Pct"] * 100,
-                mode='lines',
-                line=dict(
-                    color=df_3d["Global_USD"],
-                    colorscale='Rainbow',
-                    width=4
+                mode='markers',
+                marker=dict(
+                    size=5,
+                    color=list(range(len(df_3d))), # ไล่สีรุ้งตามเวลา
+                    colorscale='Rainbow',          # ปรับเป็นสีรุ้งแบบที่ขอมา
+                    opacity=0.8,
+                    line=dict(width=0)
                 ),
                 text=df_3d.index.strftime('%Y-%m-%d'),
                 hovertemplate='วันที่: %{text}<br>ราคา: $%{y:,.2f}<br>ความผันผวน: %{z:.2f}%<extra></extra>'
@@ -2019,7 +2021,7 @@ def render_tab1(cfg: dict[str, Any], data: pd.DataFrame, data_err: Optional[str]
                     bgcolor='#181a20'
                 ),
                 template="plotly_dark",
-                height=500,
+                height=600,
                 margin=dict(l=0, r=0, b=0, t=40),
                 paper_bgcolor='rgba(0,0,0,0)',
                 plot_bgcolor='rgba(0,0,0,0)'
@@ -2346,7 +2348,6 @@ def render_market_column_view(df: pd.DataFrame, mode: str, current_asset: str, u
             st.markdown(html, unsafe_allow_html=True)
             st.button("fav", key=f"fav_{mode}_{sym}",
                       on_click=_toggle_fav, args=(sym,))
-            # นำ st.rerun() ออก ใช้แค่ on_click=_select_asset ซึ่ง Streamlit จะ rerun ให้อัตโนมัติอยู่แล้ว
             st.button("select", key=f"sel_{mode}_{sym}",
                       on_click=_select_asset, args=(sym,))
 
