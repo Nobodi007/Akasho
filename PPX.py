@@ -20,7 +20,8 @@ UI ถูกเรียกใต้ `if __name__ == "__main__"` เท่าน
 
 MODEL_VERSION / CHANGELOG
 -------------------------
-v1.5.27             + [FIX] ใช้ Radio Button ทำระบบนำทางแทน Tabs เพื่อแก้ปัญหาเด้งเปลี่ยนหน้า 100%
+v1.5.27             + [FEATURE] เพิ่มระบบฝากเงินบาท (THB) แบบ Pop-up Dialog ในหน้า Wallet
+                    + [FIX] ใช้ Radio Button ทำระบบนำทางแทน Tabs เพื่อแก้ปัญหาเด้งเปลี่ยนหน้า 100%
                       ปรับ Native Columns ใน Tab 4 แทนตาราง HTML เดิมเพื่อแก้ปัญหาคลิกไม่ติด
 v1.5.26             + [FIX] อัปเดตระบบ Logo เป็น Base64 SVG + Multi-layer Background
 v1.5.24             + [FEATURE] กดเหรียญใน Wallet Tab 4 แล้ววาร์ปไปหน้าเทรด (Exchange UI Simulator Tab 3)
@@ -45,7 +46,7 @@ from typing import Any, Mapping, Optional
 import numpy as np
 import pandas as pd
 
-MODEL_VERSION = "1.5.26"
+MODEL_VERSION = "1.5.27"
 
 try:
     import yaml
@@ -1377,6 +1378,12 @@ THEME_CSS = """
     .st-key-op_buy_btn button  { background:#0ecb81 !important; }
     .st-key-op_sell_btn button { background:#f6465d !important; }
     .st-key-op_buy_btn button:disabled, .st-key-op_sell_btn button:disabled { opacity:.35 !important; }
+    
+    /* ปุ่ม ฝาก / ถอน / ••• ในตาราง Wallet */
+    .wl-act { text-align:center; font-weight:600; font-size:.85rem; color:#0ecb81; }
+    .wl-act.wl-more { color:#EAECEF; }
+    .st-key-wl_deposit button { padding:0 !important; justify-content:center; background:transparent !important; border:none !important; }
+    .st-key-wl_deposit button, .st-key-wl_deposit button p { color:#0ecb81 !important; font-weight:600 !important; font-size:.85rem !important; }
 </style>
 """
 
@@ -2692,7 +2699,7 @@ def render_tab3(cfg: dict[str, Any], data: pd.DataFrame, data_err: Optional[str]
             b1, b2, b3 = st.columns(3)
             n_orders = b1.number_input("จำนวนออเดอร์สุ่ม", value=20, min_value=1,
                                        step=10, key="sim_n")
-            seed = b2.number_input("Random seed", value=42, step=1, key="sim_seed", label_visibility="collapsed")
+            seed = b2.number_input("Random seed", value=42, step=1, key="sim_seed")
             run_batch = b3.button("🎲 สุ่มออเดอร์ (Auto-Run)", key="sim_batch", **WIDE)
             reset = st.button("♻️ ล้างระบบใหม่", key="sim_reset", **WIDE)
 
@@ -2764,6 +2771,69 @@ def render_tab3(cfg: dict[str, Any], data: pd.DataFrame, data_err: Optional[str]
             with c3:
                 st.metric("กำไรสะสม Dealer (THB)", fmt_baht(sim["pnl_thb"], True))
                 st.metric("ออเดอร์ทั้งหมด", f"{len(sim['orders'])} รายการ")
+
+
+def _parse_amount(text: Any) -> float:
+    try:
+        v = float(str(text).replace(",", "").replace(" ", "").strip())
+    except ValueError:
+        return 0.0
+    return v if math.isfinite(v) and v > 0 else 0.0
+
+
+def _open_deposit() -> None:
+    st.session_state["open_deposit"] = True
+    st.session_state["dep_error"] = None
+
+
+def _set_dep_amt(v: float) -> None:
+    st.session_state["dep_amt"] = f"{v:,.0f}"
+
+
+def _do_deposit() -> None:
+    amt = _parse_amount(st.session_state.get("dep_amt", "0"))
+    if amt <= 0:
+        st.session_state["dep_error"] = "กรอกจำนวนเงินที่มากกว่า 0"
+        return
+    sim = st.session_state.get("sim")
+    if not isinstance(sim, dict):
+        sim = {"customer_thb": 1_000_000.0, "customer_coins": {}}
+        st.session_state["sim"] = sim
+    sim["customer_thb"] = float(sim.get("customer_thb", 1_000_000.0)) + amt
+    st.session_state["dep_amt"] = "0"
+    st.session_state["dep_error"] = None
+    st.session_state["dep_done"] = amt
+
+
+def _deposit_dialog_body() -> None:
+    done = st.session_state.pop("dep_done", None)
+    if done:
+        st.session_state["dep_toast"] = done
+        st.rerun()  # รีรันทั้งแอป: ปิดหน้าต่าง + อัปเดตยอดในตาราง
+
+    sim = st.session_state.get("sim")
+    cash = float(sim.get("customer_thb", 1_000_000.0)) if isinstance(sim, dict) else 1_000_000.0
+    st.markdown(f"ยอดเงินบาทคงเหลือ: **{cash:,.2f} THB**")
+
+    amt = comma_number_input("จำนวนเงินที่ต้องการฝาก (THB)", value=0,
+                             min_value=0, key="dep_amt")
+    quick = st.columns(4, gap="small")
+    for col, v in zip(quick, (1_000, 10_000, 100_000, 1_000_000)):
+        col.button(f"{v:,.0f}", key=f"dep_q_{v}", on_click=_set_dep_amt,
+                   args=(float(v),), **WIDE)
+
+    st.caption(f"ยอดหลังฝาก: {cash + amt:,.2f} THB · โหมดจำลอง เงินนี้ใช้ในกระเป๋าจำลองเท่านั้น")
+    err = st.session_state.get("dep_error")
+    if err:
+        st.error(err)
+    st.button("ยืนยันการฝาก", key="dep_confirm", type="primary",
+              on_click=_do_deposit, **WIDE)
+
+
+def deposit_dialog() -> None:
+    # ห่อ st.dialog ตอนเรียกใช้ (ไม่ใช้ @decorator ระดับโมดูล)
+    # เพื่อให้ import ไฟล์นี้ใน unittest ได้แม้ไม่มี streamlit
+    st.dialog("ฝากเงินบาท")(_deposit_dialog_body)()
 
 # ---- 5.5 TAB 4 — WALLET ------------------------------------------------
 
@@ -2870,9 +2940,22 @@ def render_tab4(cfg: dict[str, Any], data: pd.DataFrame, market_df: pd.DataFrame
                 c_qty.markdown(f'<div class="wl-cell">{a["qty"]:,.6f}</div>', unsafe_allow_html=True)
                 c_pend.markdown('<div class="wl-cell" style="color:#848e9c;">0.00</div>',
                                 unsafe_allow_html=True)
-                c_act.markdown('<div class="wl-cell wl-acts"><span>ฝาก</span><span>ถอน</span>'
-                               '<span>•••</span></div>', unsafe_allow_html=True)
+                
+                a_dep, a_wd, a_more = c_act.columns([1, 1, 0.7],
+                                                    vertical_alignment="center", gap="small")
+                if sym == "THB":
+                    a_dep.button("ฝาก", key="wl_deposit", type="tertiary",
+                                 on_click=_open_deposit, **WIDE)
+                else:
+                    a_dep.markdown('<div class="wl-act">ฝาก</div>', unsafe_allow_html=True)
+                a_wd.markdown('<div class="wl-act">ถอน</div>', unsafe_allow_html=True)
+                a_more.markdown('<div class="wl-act wl-more">•••</div>', unsafe_allow_html=True)
 
+    dep_toast = st.session_state.pop("dep_toast", None)
+    if dep_toast:
+        st.toast(f"ฝากเงิน {dep_toast:,.2f} THB สำเร็จ", icon="✅")
+    if st.session_state.pop("open_deposit", False):
+        deposit_dialog()
 
 def main() -> None:
     st.set_page_config(
