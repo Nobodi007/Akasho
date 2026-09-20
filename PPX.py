@@ -10,7 +10,7 @@ LAYERS
   2. DATA LAYER             yfinance / cache / CSV export
   3. UI THEME & COMPONENTS  CSS, metric card, timeline, gauge, TradingView
   4. AUDIT TRAIL            log การเปลี่ยนพารามิเตอร์
-  5. APP                    sidebar + 3 tabs (อยู่ใน main() ทั้งหมด)
+  5. APP                    sidebar + 4 tabs (อยู่ใน main() ทั้งหมด)
 
 TESTABILITY
 -----------
@@ -20,6 +20,7 @@ UI ถูกเรียกใต้ `if __name__ == "__main__"` เท่าน
 
 MODEL_VERSION / CHANGELOG
 -------------------------
+v1.5.20             + [FEATURE] เพิ่มระบบ "กระเป๋าเงิน" (Wallet Tab 4) สไตล์ Bitkub แสดงยอดรวม THB/USDT, วงเงินรายวัน, และตารางสินทรัพย์ (ผูกตรรกะกับ Simulator อัตโนมัติ)
 v1.5.19             + [UI] ปรับกราฟ 3D ใน Tab 1 ให้เป็นจุด (Scatter) ไล่สีรุ้ง (Rainbow) แทนเส้น เพื่อความเท่และดูง่ายขึ้น
 v1.5.18             + [FEATURE] เพิ่มกราฟราคา 3D แบบ Interactive (3D Price vs Volatility vs Time) ใน Tab 1 สำหรับวิเคราะห์มิติความเคลื่อนไหวของราคา
 v1.5.17             + [FIX] แก้กราฟ TradingView ไม่เปลี่ยนตามเมื่อคลิกเหรียญ (ปรับ container_id ให้เป็น dynamic ตามชื่อเหรียญ) และเพิ่ม asset ใน signature
@@ -44,7 +45,7 @@ from typing import Any, Mapping, Optional
 import numpy as np
 import pandas as pd
 
-MODEL_VERSION = "1.5.19"
+MODEL_VERSION = "1.5.20"
 
 try:
     import yaml
@@ -499,6 +500,7 @@ def sim_defaults(asset_name: str, start_date_val: Any, spot_usd: float,
         "orders": [],
         "current_date": start_date_val,
         "customer_coins": {},
+        "customer_thb": 1000000.0, # ให้เงินตั้งต้น 1,000,000 บาท ในกระเป๋าจำลอง
     }
 
 def sim_config_signature(ctx: Mapping[str, Any], target_stock_thb: float,
@@ -538,6 +540,7 @@ def sim_normalize_state(sim: Any, asset: str, start_date_val: Any,
     sim.setdefault("orders", [])
     sim.setdefault("current_date", start_date_val)
     sim.setdefault("customer_coins", {})
+    sim.setdefault("customer_thb", 1000000.0)
 
     sim.setdefault("inv_coins", {})
     if not isinstance(sim["inv_coins"], dict):
@@ -930,6 +933,13 @@ def execute_order(
     else:
         coins_book[current_asset] = max(0.0, coins_book.get(current_asset, 0.0) - coins)
 
+    # ตัดยอดเงินบาทลูกค้าในกระเป๋า (Wallet)
+    sim["customer_thb"] = sim.get("customer_thb", 1000000.0)
+    if side == "buy":
+        sim["customer_thb"] -= amount_thb
+    else:
+        sim["customer_thb"] += amount_thb
+
     record = {
         "วันที่": order_date.strftime("%Y-%m-%d"),
         "ฝั่ง": "ซื้อ" if side == "buy" else "ขาย",
@@ -1210,7 +1220,7 @@ THEME_CSS = """
     .oe-tab.active { color: #EAECEF; border-bottom: 2px solid #fcd535; padding-bottom: 6px; margin-bottom: -8px; }
     .oe-bal { display: flex; justify-content: space-between; font-size: 0.8rem; color: #848e9c; margin-bottom: 16px; }
 
-    /* ---------- Order buttons (จับด้วย st-key-* แทน :contains) ---------- */
+    /* ---------- Order buttons ---------- */
     .st-key-sim_send button { width: 100% !important; font-weight: 700; padding: 12px; color: #fff !important; border: none !important; }
     .st-key-sim_batch button { width: 100% !important; font-weight: 700; background: #fcd535 !important; color: #181a20 !important; border: none !important; }
 
@@ -1262,7 +1272,26 @@ THEME_CSS = """
                 white-space: nowrap; font-variant-numeric: tabular-nums; }
     .mk-pct { font-size: .75rem; font-weight: 600; white-space: nowrap;
               font-variant-numeric: tabular-nums; }
-    .mk-sel { background: #0a5c33 !important; }   /* แถวที่เลือก = เขียวแบบ Bitkub */
+    .mk-sel { background: #0a5c33 !important; }
+
+    /* Wallet Tab Styles */
+    .wl-btn-solid { background: #0ecb81; border: none; color: #fff; padding: 8px 24px; border-radius: 4px; font-weight: 600; cursor: pointer; font-size: 0.85rem; }
+    .wl-btn-out { background: transparent; border: 1px solid #2b3139; color: #EAECEF; padding: 8px 24px; border-radius: 4px; font-weight: 600; cursor: pointer; font-size: 0.85rem; transition: 0.2s; }
+    .wl-btn-out:hover { border-color: #0ecb81; color: #0ecb81; }
+    .wl-box { background: #181a20; border: 1px solid #2b3139; border-radius: 8px; padding: 20px; }
+    .wl-total-val { font-size: 2.2rem; font-weight: 700; color: #EAECEF; font-variant-numeric: tabular-nums; margin: 4px 0; }
+    .wl-lim-title { font-size: 0.8rem; font-weight: 600; color: #EAECEF; margin-bottom: 12px; }
+    .wl-lim-row { display: flex; justify-content: space-between; font-size: 0.7rem; color: #848e9c; margin-bottom: 4px; }
+    .wl-lim-val { color: #EAECEF; font-weight: 500; font-variant-numeric: tabular-nums; }
+    .wl-lim-bar { width: 100%; height: 4px; background: #2b3139; border-radius: 2px; margin-top: 8px; overflow: hidden; }
+    .wl-lim-fill { height: 100%; background: #0ecb81; width: 0%; }
+    .wl-tbl-head { display: flex; padding: 12px 16px; border-bottom: 1px solid #2b3139; font-size: 0.75rem; color: #848e9c; }
+    .wl-tbl-row { display: flex; padding: 16px; border-bottom: 1px solid #1f2329; align-items: center; }
+    .wl-tbl-row:hover { background: #2b3139; }
+    .wl-col-ast { flex: 2; display: flex; align-items: center; gap: 12px; color: #EAECEF; font-weight: 600; font-size: 0.9rem; }
+    .wl-col-val { flex: 1.5; text-align: right; color: #EAECEF; font-size: 0.85rem; font-variant-numeric: tabular-nums; }
+    .wl-col-act { flex: 1.5; text-align: right; display: flex; justify-content: flex-end; gap: 16px; font-size: 0.8rem; font-weight: 600; }
+    .wl-act-link { color: #0ecb81; cursor: pointer; text-decoration: none; }
 </style>
 """
 
@@ -2005,7 +2034,7 @@ def render_tab1(cfg: dict[str, Any], data: pd.DataFrame, data_err: Optional[str]
                 marker=dict(
                     size=5,
                     color=list(range(len(df_3d))), # ไล่สีรุ้งตามเวลา
-                    colorscale='Rainbow',          # ปรับเป็นสีรุ้งแบบที่ขอมา
+                    colorscale='Rainbow',          
                     opacity=0.8,
                     line=dict(width=0)
                 ),
@@ -2532,11 +2561,11 @@ def render_tab3(cfg: dict[str, Any], data: pd.DataFrame, data_err: Optional[str]
                 <span class="oe-tab">สต็อปลิมิต</span>
             </div>""", unsafe_allow_html=True)
 
-            cash_balance = nc_snapshot(0, cfg["total_capital_thb"], cfg["cex_margin_thb"], cfg["liab_thb"], 0, 0, 0, 0, 0, 0)["cash"]
+            cash_balance = sim.get("customer_thb", 1000000.0)
             coin_balance = sim["customer_coins"].get(asset, 0.0)
 
             st.markdown(f"""<div class="oe-bal">
-                <span>คงเหลือ: <b style="color:#EAECEF;">{cash_balance:,.0f} THB</b></span>
+                <span>คงเหลือ: <b style="color:#EAECEF;">{cash_balance:,.2f} THB</b></span>
                 <span><b style="color:#EAECEF;">{coin_balance:,.6f} {asset}</b></span>
             </div>""", unsafe_allow_html=True)
 
@@ -2576,6 +2605,13 @@ def render_tab3(cfg: dict[str, Any], data: pd.DataFrame, data_err: Optional[str]
         if send:
             steps, _rec = execute_order(sim, side_key, float(order_amt), current_date_val, data.loc[current_date_val], ctx)
             st.session_state.sim_steps = steps
+            
+            sim["customer_thb"] = sim.get("customer_thb", 1000000.0)
+            if side_key == "buy":
+                sim["customer_thb"] -= float(order_amt)
+            else:
+                sim["customer_thb"] += float(order_amt)
+
             valid_dates = data[data.index >= current_date_val].index
             if len(valid_dates) > 1:
                 sim["current_date"] = pd.to_datetime(np.random.choice(valid_dates))
@@ -2602,10 +2638,170 @@ def render_tab3(cfg: dict[str, Any], data: pd.DataFrame, data_err: Optional[str]
                 amt = float(rng.lognormal(mu, sigma))
                 s_ = "buy" if rng.random() < p_buy else "sell"
                 last_steps, _rec = execute_order(sim, s_, max(amt, MIN_TRADE_THB), d, data.loc[d], ctx)
+                
+                sim["customer_thb"] = sim.get("customer_thb", 1000000.0)
+                if s_ == "buy":
+                    sim["customer_thb"] -= max(amt, MIN_TRADE_THB)
+                else:
+                    sim["customer_thb"] += max(amt, MIN_TRADE_THB)
 
             sim["current_date"] = pd.to_datetime(chosen_dates[-1])
             st.session_state.sim_steps = last_steps
             st.rerun()
+
+# ---- 5.5 TAB 4 — WALLET ------------------------------------------------
+
+def render_tab4(cfg: dict[str, Any], data: pd.DataFrame, market_df: pd.DataFrame) -> None:
+    if data.empty:
+        st.error("⚠️ ไม่สามารถโหลดข้อมูลได้")
+        return
+
+    sim = st.session_state.get("sim", {})
+    current_date_val = pd.to_datetime(sim.get("current_date", data.index[0]))
+    if current_date_val not in data.index:
+        current_date_val = pd.to_datetime(data.index[0])
+
+    usdthb_current = float(data.loc[current_date_val, "USDTHB"])
+    cust_thb = sim.get("customer_thb", 1000000.0)
+    cust_coins = sim.get("customer_coins", {})
+
+    price_thb_map = {"THB": 1.0}
+    if market_df is not None and not market_df.empty:
+        for _, row in market_df.iterrows():
+            sym = str(row["symbol"])
+            price_thb_map[sym] = float(row["price_usd"]) * usdthb_current
+    price_thb_map[cfg["asset"]] = float(data.loc[current_date_val, "Global_USD"]) * usdthb_current
+
+    total_thb = cust_thb
+    for sym, qty in cust_coins.items():
+        total_thb += qty * price_thb_map.get(sym, 0.0)
+
+    total_usdt = total_thb / usdthb_current if usdthb_current > 0 else 0
+    time_str = pd.Timestamp.now(tz="Asia/Bangkok").strftime("%H:%M:%S")
+
+    # Header
+    st.markdown(f"""
+    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:20px;">
+        <h2 style="margin:0; color:#EAECEF; font-size:1.8rem;">กระเป๋าเงิน</h2>
+        <div style="display:flex; gap:12px;">
+            <button class="wl-btn-solid">ฝาก</button>
+            <button class="wl-btn-out">ถอน</button>
+            <button class="wl-btn-out">ประวัติการทำรายการ</button>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    # Total Box
+    st.markdown(f"""
+    <div class="wl-box" style="margin-bottom:20px;">
+        <div style="font-size:0.9rem; color:#848e9c; font-weight:600;">มูลค่าทั้งหมด 👁️</div>
+        <div class="wl-total-val">{total_thb:,.2f} <span style="font-size:1.2rem; color:#848e9c;">THB</span></div>
+        <div style="font-size:0.9rem; color:#848e9c;">≈ {total_usdt:,.2f} USDT <span style="float:right; font-size:0.8rem;">อัปเดตล่าสุด: {time_str}</span></div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    # Limits Box
+    st.markdown("""
+    <div style="margin-bottom: 24px;">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+            <div style="font-size:1.05rem; font-weight:700; color:#EAECEF;">วงเงินต่อวัน</div>
+            <button class="wl-btn-solid" style="padding:6px 12px; font-size:0.75rem;">เพิ่มวงเงินต่อวัน</button>
+        </div>
+        <div style="display:flex; gap:16px;">
+            <div class="wl-box" style="flex:1; padding:16px;">
+                <div class="wl-lim-title"><span style="color:#0ecb81;">💵</span> ฝากเงินบาท</div>
+                <div class="wl-lim-row"><span>วงเงินที่ใช้แล้ว (THB)</span><span>วงเงินการฝาก (THB)</span></div>
+                <div class="wl-lim-row"><span class="wl-lim-val">0.00</span><span class="wl-lim-val">4,000,000.00</span></div>
+                <div class="wl-lim-bar"><div class="wl-lim-fill" style="width:0%;"></div></div>
+            </div>
+            <div class="wl-box" style="flex:1; padding:16px;">
+                <div class="wl-lim-title"><span style="color:#0ecb81;">💵</span> ถอนเงินบาท</div>
+                <div class="wl-lim-row"><span>วงเงินที่ใช้แล้ว (THB)</span><span>วงเงินการถอน (THB)</span></div>
+                <div class="wl-lim-row"><span class="wl-lim-val">0.00</span><span class="wl-lim-val">4,000,000.00</span></div>
+                <div class="wl-lim-bar"><div class="wl-lim-fill" style="width:0%;"></div></div>
+            </div>
+            <div class="wl-box" style="flex:1; padding:16px;">
+                <div class="wl-lim-title"><span style="color:#0ecb81;">🪙</span> ฝากเหรียญ</div>
+                <div class="wl-lim-row"><span>วงเงินที่ใช้แล้ว (THB)</span><span>วงเงินการฝาก (THB)</span></div>
+                <div class="wl-lim-row"><span class="wl-lim-val">0.00</span><span class="wl-lim-val">4,000,000.00</span></div>
+                <div class="wl-lim-bar"><div class="wl-lim-fill" style="width:0%;"></div></div>
+            </div>
+            <div class="wl-box" style="flex:1; padding:16px;">
+                <div class="wl-lim-title"><span style="color:#0ecb81;">🚀</span> ถอนเหรียญ</div>
+                <div class="wl-lim-row"><span>วงเงินที่ใช้แล้ว (THB)</span><span>วงเงินการถอน (THB)</span></div>
+                <div class="wl-lim-row"><span class="wl-lim-val">0.00</span><span class="wl-lim-val">4,000,000.00</span></div>
+                <div class="wl-lim-bar"><div class="wl-lim-fill" style="width:0%;"></div></div>
+            </div>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    # Asset Table Title and Controls
+    st.markdown("""
+    <div style="display:flex; align-items:center; margin-bottom:16px; gap:8px;">
+        <div style="width:3px; height:16px; background:#0ecb81; border-radius:2px;"></div>
+        <div style="font-size:1.05rem; font-weight:700; color:#EAECEF;">สินทรัพย์</div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    c_search, c_hide, c_pad = st.columns([2, 1.5, 6])
+    with c_search:
+        search_q = st.text_input("ค้นหา", label_visibility="collapsed", placeholder="🔍 ค้นหาสินทรัพย์")
+    with c_hide:
+        st.markdown('<div style="margin-top:8px;"></div>', unsafe_allow_html=True)
+        hide_small = st.checkbox("ซ่อนเหรียญที่มูลค่า < 1 บาท", value=False)
+
+    # Asset List Construction
+    assets_to_show = [{"sym": "THB", "qty": cust_thb, "price": 1.0, "val": cust_thb}]
+    for sym in SUPPORTED_ASSETS:
+        qty = cust_coins.get(sym, 0.0)
+        price = price_thb_map.get(sym, 0.0)
+        val = qty * price
+        assets_to_show.append({"sym": sym, "qty": qty, "price": price, "val": val})
+
+    html_rows = ""
+    for a in assets_to_show:
+        if hide_small and a["val"] < 1.0:
+            continue
+        if search_q and search_q.lower() not in a["sym"].lower() and search_q.lower() not in COIN_NAMES.get(a["sym"], "").lower():
+            continue
+
+        logo = COIN_LOGOS.get(a["sym"], "https://cdn-icons-png.flaticon.com/512/197/197583.png") if a["sym"] != "THB" else "https://cdn-icons-png.flaticon.com/512/197/197583.png"
+        sub_name = COIN_NAMES.get(a["sym"], "Thai Baht")
+
+        html_rows += f"""
+        <div class="wl-tbl-row">
+            <div class="wl-col-ast">
+                <img src="{logo}" style="width:28px; height:28px; border-radius:50%; background:#181a20; padding:2px;">
+                <div>
+                    <div style="line-height:1.2;">{a['sym']}</div>
+                    <div style="font-size:0.7rem; color:#848e9c; font-weight:500;">{sub_name}</div>
+                </div>
+            </div>
+            <div class="wl-col-val">{a['val']:,.2f}</div>
+            <div class="wl-col-val">{a['qty']:,.6f}</div>
+            <div class="wl-col-val" style="color:#848e9c;">0.00</div>
+            <div class="wl-col-act">
+                <span class="wl-act-link">ฝาก</span>
+                <span class="wl-act-link">ถอน</span>
+                <span class="wl-act-link" style="color:#848e9c;">•••</span>
+            </div>
+        </div>
+        """
+
+    st.markdown(f"""
+    <div style="background:#181a20; border:1px solid #2b3139; border-radius:8px; overflow:hidden;">
+        <div class="wl-tbl-head">
+            <div style="flex:2;">สินทรัพย์ ↕</div>
+            <div style="flex:1.5; text-align:right;">มูลค่าทั้งหมด ↕</div>
+            <div style="flex:1.5; text-align:right;">จำนวนที่ใช้ได้ ↕</div>
+            <div style="flex:1.5; text-align:right;">รอดำเนินการ ↕</div>
+            <div style="flex:1.5;"></div>
+        </div>
+        {html_rows}
+    </div>
+    """, unsafe_allow_html=True)
+
 
 def main() -> None:
     st.set_page_config(
@@ -2627,10 +2823,11 @@ def main() -> None:
 
     market_df = fetch_market_overview(SUPPORTED_ASSETS)
 
-    tab1, tab2, tab3 = st.tabs([
+    tab1, tab2, tab3, tab4 = st.tabs([
         "📊 5-Year Backtest Simulator",
         "🧮 Liquidity & Capital Planner",
         "🛒 Exchange UI Simulator",
+        "💼 กระเป๋าเงิน (Wallet)",
     ])
 
     with tab1:
@@ -2639,6 +2836,8 @@ def main() -> None:
         render_tab2(cfg, data, data_err)
     with tab3:
         render_tab3(cfg, data, data_err, price_lookup={row["symbol"]: row["price_usd"] for _, row in market_df.iterrows()} if not market_df.empty else {}, market_df=market_df)
+    with tab4:
+        render_tab4(cfg, data, market_df=market_df)
 
     st.markdown(
         f"<div class='xs-foot'>XSpring Dealer Suite · Model v{MODEL_VERSION} · "
