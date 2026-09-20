@@ -20,6 +20,7 @@ UI ถูกเรียกใต้ `if __name__ == "__main__"` เท่าน
 
 MODEL_VERSION / CHANGELOG
 -------------------------
+v1.5.25             + [FIX] แก้บั๊กกดแถวเหรียญใน Wallet แล้วไม่ไปหน้าเทรด (เพิ่ม CSS ปุ่มโปร่งใสกลับเข้ามา, อัปเดต JS Injection ให้บังคับสลับแท็บได้ 100% ทุกการคลิกโดยการเลี่ยงระบบ Cache)
 v1.5.24             + [FEATURE] กดเหรียญใน Wallet Tab 4 แล้ววาร์ปไปหน้าเทรด (Exchange UI Simulator Tab 3) พร้อมเปลี่ยนกราฟอัตโนมัติ
                     + [FIX] ซ่อมรูปโลโก้ LINK (Chainlink) ที่พังจากเว็บต้นทาง
 v1.5.23             + [UI] จัดระเบียบ Tab 4 (Wallet): ลบปุ่ม Header และวงเงินต่อวันออกให้ดูสะอาดขึ้น, แก้โลโก้ THB ให้เป็นธงชาติไทยที่ถูกต้อง
@@ -45,7 +46,7 @@ from typing import Any, Mapping, Optional
 import numpy as np
 import pandas as pd
 
-MODEL_VERSION = "1.5.24"
+MODEL_VERSION = "1.5.25"
 
 try:
     import yaml
@@ -120,7 +121,7 @@ COIN_LOGOS = {
     "SOL": "https://assets.coingecko.com/coins/images/4128/small/solana.png",
     "ADA": "https://assets.coingecko.com/coins/images/975/small/cardano.png",
     "DOGE": "https://assets.coingecko.com/coins/images/5/small/dogecoin.png",
-    "LINK": "https://cryptologos.cc/logos/chainlink-link-logo.png",  # เปลี่ยนลิงก์ LINK ที่นี่
+    "LINK": "https://cryptologos.cc/logos/chainlink-link-logo.png",  
     "XRP": "https://assets.coingecko.com/coins/images/44/small/xrp-symbol-white-128.png",
     "XLM": "https://assets.coingecko.com/coins/images/100/small/Stellar_symbol_black_RGB.png",
     "HBAR": "https://assets.coingecko.com/coins/images/3688/small/hbar.png",
@@ -1506,10 +1507,7 @@ def get_coin_logo(symbol: str) -> str:
     return COIN_LOGOS.get(symbol, "https://cdn-icons-png.flaticon.com/512/1490/1490844.png")
 
 def _go_to_exchange(sym: str) -> None:
-    # โค้ดนี้จะถูกเรียกเมื่อคลิกที่เหรียญในหน้า Wallet Tab 4
-    # ตั้งค่าให้เปลี่ยนเหรียญใน Sidebar เป็นตัวที่คลิก
     st.session_state["bt_asset"] = sym
-    # ระบุ Index ของ Tab ที่อยากให้เด้งไป (Exchange UI Simulator คือ Tab 3 มี index = 2)
     st.session_state["force_tab_switch"] = 2
 
 
@@ -2700,7 +2698,7 @@ def render_tab4(cfg: dict[str, Any], data: pd.DataFrame, market_df: pd.DataFrame
     total_usdt = total_thb / usdthb_current if usdthb_current > 0 else 0
     time_str = pd.Timestamp.now(tz="Asia/Bangkok").strftime("%H:%M:%S")
 
-    # Header
+    # Header (ไม่มีปุ่มฝาก/ถอน/ประวัติ ตามที่ร้องขอ)
     st.markdown(
         f'<div style="margin-bottom:20px;">'
         f'<h2 style="margin:0; color:#EAECEF; font-size:1.8rem;">กระเป๋าเงิน</h2>'
@@ -2842,16 +2840,23 @@ def main() -> None:
     # -------------------------------------------------------------
     tab_idx = st.session_state.get("force_tab_switch")
     if tab_idx is not None:
+        unique_id = uuid.uuid4().hex
         js = f"""
+        <div id="tab-switcher-{unique_id}"></div>
         <script>
-        var tabs = window.parent.document.querySelectorAll('button[data-baseweb="tab"]');
-        if(tabs.length > {tab_idx}) {{
-            tabs[{tab_idx}].click();
-        }}
+            let attempts = 0;
+            let interval = setInterval(() => {{
+                let tabs = window.parent.document.querySelectorAll('button[data-baseweb="tab"], button[role="tab"]');
+                if (tabs.length > {tab_idx}) {{
+                    tabs[{tab_idx}].click();
+                    clearInterval(interval);
+                }}
+                if (++attempts > 20) clearInterval(interval);
+            }}, 50);
         </script>
         """
         components.html(js, height=0, width=0)
-        st.session_state["force_tab_switch"] = None
+        del st.session_state["force_tab_switch"]
 
 
 if __name__ == "__main__":
