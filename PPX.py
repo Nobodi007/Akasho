@@ -25,6 +25,8 @@ v1.4.0              เพิ่ม Market Overview (รายการโปร
                       + ปรับแก้ UI ตัดแถบ Navbar ออก และแก้บัคโลโก้เหรียญไม่ขึ้น
                       + แก้ไขบักการประเมินมูลค่าพอร์ตลูกค้า (Cross-asset valuation)
                       + แก้ไขบัค Markdown Code Block render HTML ดิบ
+                      + จำกัดรายชื่อเหรียญให้เหลือเฉพาะรายการ Bitkub ที่กำหนด
+                        (BTC, ETH, USDT, SOL, DOGE, SIRIHUB2, ADA, HBAR, LINK, USDC, XLM, XRP)
 """
 
 from __future__ import annotations
@@ -97,8 +99,8 @@ GLOBAL_EXCHANGE_FEE_PRESET = {
 LOCAL_EXCHANGES = ["Bitkub"]
 
 SUPPORTED_ASSETS = [
-    "BTC", "ETH", "SOL", "DOGE", "ADA", "HBAR", "LINK", "XLM", "XRP", "USDT", "USDC",
-    "ASTER", "LIT", "ZIG", "PEPE", "VVV", "ZAMA", "STRK",
+    "BTC", "ETH", "SOL", "DOGE", "ADA", "HBAR", "LINK", "XLM", "XRP",
+    "SIRIHUB2", "USDT", "USDC",
 ]
 STABLECOINS = ["USDT", "USDC"]
 
@@ -113,6 +115,7 @@ TV_LOCAL_SYMBOL = {
     "BTC": "BITKUB:BTCTHB", "ETH": "BITKUB:ETHTHB", "SOL": "BITKUB:SOLTHB",
     "DOGE": "BITKUB:DOGETHB", "ADA": "BITKUB:ADATHB", "XRP": "BITKUB:XRPTHB",
     "LINK": "BITKUB:LINKTHB", "XLM": "BITKUB:XLMTHB", "HBAR": "BITKUB:HBARTHB",
+    "SIRIHUB2": "BITKUB:SIRIHUB2THB",
     "USDT": "BITKUB:USDTTHB", "USDC": "BITKUB:USDCTHB",
 }
 TV_GLOBAL_SYMBOL = {a: f"BINANCE:{a}USDT" for a in SUPPORTED_ASSETS}
@@ -2675,7 +2678,7 @@ def render_tab3(cfg: dict[str, Any], data: pd.DataFrame, data_err: Optional[str]
             "XLM": {"name": "Stellar", "logo": "https://cryptologos.cc/logos/stellar-xlm-logo.png"},
             "XRP": {"name": "XRP", "logo": "https://cryptologos.cc/logos/xrp-xrp-logo.png"},
             "USDC": {"name": "USD Coin", "logo": "https://cryptologos.cc/logos/usd-coin-usdc-logo.png"},
-            "PEPE": {"name": "Pepe", "logo": "https://cryptologos.cc/logos/pepe-pepe-logo.png"},
+            "SIRIHUB2": {"name": "SiriHub2", "logo": "https://cdn-icons-png.flaticon.com/512/1490/1490844.png"},
             "THB": {"name": "Thai Baht", "logo": "https://cdn-icons-png.flaticon.com/512/197/197583.png"},
         }
         default_logo = "https://cdn-icons-png.flaticon.com/512/1490/1490844.png"
