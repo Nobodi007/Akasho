@@ -980,8 +980,12 @@ NAV_LABELS = [
 NAV_EXCHANGE = NAV_LABELS[2]
 
 def _go_to_exchange(sym: str) -> None:
-    st.session_state["bt_asset"] = sym
-    st.session_state["main_nav"] = NAV_EXCHANGE
+    # Queue the navigation/asset change. The actual widget keys are applied
+    # at the start of the next script run, before build_sidebar() creates them.
+    # This avoids Streamlit widget-state races when Wallet buttons trigger a
+    # rerun after the main_nav radio already existed in the previous run.
+    st.session_state["pending_exchange_asset"] = sym
+    st.session_state["pending_main_nav"] = NAV_EXCHANGE
 
 
 # =========================================================================
@@ -2797,6 +2801,18 @@ def main() -> None:
         layout="wide",
         initial_sidebar_state="expanded",
     )
+
+    # Apply Wallet -> Exchange navigation before any target widgets are
+    # instantiated. This makes both the selected coin and the main menu
+    # deterministic across Streamlit reruns.
+    pending_asset = st.session_state.pop("pending_exchange_asset", None)
+    if pending_asset in SUPPORTED_ASSETS:
+        st.session_state["bt_asset"] = pending_asset
+
+    pending_nav = st.session_state.pop("pending_main_nav", None)
+    if pending_nav in NAV_LABELS:
+        st.session_state["main_nav"] = pending_nav
+
     st.markdown(THEME_CSS, unsafe_allow_html=True)
 
     cfg = build_sidebar()
