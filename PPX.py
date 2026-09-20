@@ -1307,43 +1307,32 @@ THEME_CSS = """
     .wl-name { line-height: 1.2; color: #EAECEF; font-weight: 600; font-size: 0.9rem; }
     .wl-name span { font-size: 0.7rem; color: #848e9c; font-weight: 500; }
 
-    /* ---------- แปลง Main Navigation Radio ให้เป็น Tabs ตามรูป ---------- */
+    /* เมนูหลักหน้าตาเหมือนแท็บเดิม (st.radio key = main_nav) */
     .st-key-main_nav [role="radiogroup"] {
-        gap: 16px; 
-        border-bottom: 1px solid #2b3139; 
-        padding-bottom: 0px; 
-        margin-bottom: 16px;
+        gap: 16px !important;
+        flex-wrap: nowrap !important;
+        border-bottom: 1px solid #2b3139;
+        padding-bottom: 0 !important;
     }
-    .st-key-main_nav label[data-baseweb="radio"] {
-        background: transparent !important; 
-        border: none !important;
-        padding: 0 4px 6px 4px !important; 
+    .st-key-main_nav label {
+        height: 36px;
         margin: 0 0 -1px 0 !important;
-        border-radius: 0 !important; 
-        border-bottom: 2px solid transparent !important;
+        padding: 0 4px !important;
+        align-items: center;
+        cursor: pointer;
+        border-bottom: 2px solid transparent;
+        background: transparent !important;
     }
-    /* ซ่อนปุ่มกลม (Radio Circle) */
-    .st-key-main_nav label[data-baseweb="radio"] > div:first-child {
-        display: none !important;
+    .st-key-main_nav label > div:first-of-type { display: none !important; }
+    .st-key-main_nav label p {
+        font-weight: 600;
+        color: #848e9c;
     }
-    /* ปรับแต่งข้อความเริ่มต้น */
-    .st-key-main_nav label[data-baseweb="radio"] p {
-        font-weight: 600 !important; 
-        color: #848e9c !important; 
-        font-size: 0.95rem !important;
-        margin: 0 !important;
+    .st-key-main_nav label:hover p { color: #EAECEF; }
+    .st-key-main_nav label:has(input:checked) {
+        border-bottom: 2px solid #0ecb81;
     }
-    /* Hover State (ข้อความสีแดงตอนเอาเมาส์ชี้แบบในรูป) */
-    .st-key-main_nav label[data-baseweb="radio"]:hover p {
-        color: #ff4b4b !important;
-    }
-    /* Active State (เส้นใต้สีเขียว ข้อความสีขาว สำหรับแท็บที่ถูกเลือก) */
-    .st-key-main_nav label[data-baseweb="radio"]:has(input:checked) {
-        border-bottom: 2px solid #0ecb81 !important;
-    }
-    .st-key-main_nav label[data-baseweb="radio"]:has(input:checked) p {
-        color: #EAECEF !important;
-    }
+    .st-key-main_nav label:has(input:checked) p { color: #EAECEF; }
 </style>
 """
 
