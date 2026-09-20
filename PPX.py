@@ -20,8 +20,9 @@ UI ถูกเรียกใต้ `if __name__ == "__main__"` เท่าน
 
 MODEL_VERSION / CHANGELOG
 -------------------------
+v1.5.22             + [UI] อัปเดตหน้า Wallet: ลบไอคอน 👁️ ออกจากมูลค่าทั้งหมด, เปลี่ยนโลโก้ THB เป็นแบบแถบสีดำ-เหลือง-แดงให้ตรงตาม UI อ้างอิง
 v1.5.21             + [FIX] แก้ไขบั๊ก Streamlit เรนเดอร์ HTML ออกมาเป็นตัวอักษรดิบ (Code Block) ใน Tab 4 อันเกิดจาก String Indentation
-v1.5.20             + [FEATURE] เพิ่มระบบ "กระเป๋าเงิน" (Wallet Tab 4) สไตล์ Bitkub แสดงยอดรวม THB/USDT, วงเงินรายวัน, และตารางสินทรัพย์ (ผูกตรรกะกับ Simulator อัตโนมัติ)
+v1.5.20             + [FEATURE] เพิ่มระบบ "กระเป๋าเงิน" (Wallet Tab 4) สไตล์ Bitkub แสดงยอดรวม THB/USDT, วงเงินรายวัน, และตารางสินทรัพย์
 v1.5.19             + [UI] ปรับกราฟ 3D ใน Tab 1 ให้เป็นจุด (Scatter) ไล่สีรุ้ง (Rainbow) แทนเส้น เพื่อความเท่และดูง่ายขึ้น
 v1.5.18             + [FEATURE] เพิ่มกราฟราคา 3D แบบ Interactive ใน Tab 1
 v1.5.17             + [FIX] แก้กราฟ TradingView ไม่เปลี่ยนตามเมื่อคลิกเหรียญ
@@ -44,7 +45,7 @@ from typing import Any, Mapping, Optional
 import numpy as np
 import pandas as pd
 
-MODEL_VERSION = "1.5.21"
+MODEL_VERSION = "1.5.22"
 
 try:
     import yaml
@@ -120,7 +121,7 @@ COIN_LOGOS = {
     "XRP": "https://assets.coingecko.com/coins/images/44/small/xrp-symbol-white-128.png",
     "XLM": "https://assets.coingecko.com/coins/images/100/small/Stellar_symbol_black_RGB.png",
     "HBAR": "https://assets.coingecko.com/coins/images/3688/small/hbar.png",
-    "THB": "https://cdn-icons-png.flaticon.com/512/197/197583.png",
+    "THB": "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxMDAiIGhlaWdodD0iMTAwIj48cmVjdCB3aWR0aD0iMzMuMzMiIGhlaWdodD0iMTAwIiBmaWxsPSIjMDAwMDAwIi8+PHJlY3QgeD0iMzMuMzMiIHdpZHRoPSIzMy4zMyIgaGVpZ2h0PSIxMDAiIGZpbGw9IiNGRkQ3MDAiLz48cmVjdCB4PSI2Ni42NiIgd2lkdGg9IjMzLjM0IiBoZWlnaHQ9IjEwMCIgZmlsbD0iI0ZGMDAwMCIvPjwvc3ZnPg==",
 }
 
 LOCAL_TRADING_FEE_PCT = 0.0025
@@ -1218,7 +1219,7 @@ THEME_CSS = """
     .oe-tab.active { color: #EAECEF; border-bottom: 2px solid #fcd535; padding-bottom: 6px; margin-bottom: -8px; }
     .oe-bal { display: flex; justify-content: space-between; font-size: 0.8rem; color: #848e9c; margin-bottom: 16px; }
 
-    /* ---------- Order buttons (จับด้วย st-key-* แทน :contains) ---------- */
+    /* ---------- Order buttons ---------- */
     .st-key-sim_send button { width: 100% !important; font-weight: 700; padding: 12px; color: #fff !important; border: none !important; }
     .st-key-sim_batch button { width: 100% !important; font-weight: 700; background: #fcd535 !important; color: #181a20 !important; border: none !important; }
 
@@ -2693,7 +2694,7 @@ def render_tab4(cfg: dict[str, Any], data: pd.DataFrame, market_df: pd.DataFrame
     # Total Box
     st.markdown(
         f'<div class="wl-box" style="margin-bottom:20px;">'
-        f'<div style="font-size:0.9rem; color:#848e9c; font-weight:600;">มูลค่าทั้งหมด 👁️</div>'
+        f'<div style="font-size:0.9rem; color:#848e9c; font-weight:600;">มูลค่าทั้งหมด</div>'
         f'<div class="wl-total-val">{total_thb:,.2f} <span style="font-size:1.2rem; color:#848e9c;">THB</span></div>'
         f'<div style="font-size:0.9rem; color:#848e9c;">≈ {total_usdt:,.2f} USDT <span style="float:right; font-size:0.8rem;">อัปเดตล่าสุด: {time_str}</span></div>'
         f'</div>',
@@ -2768,7 +2769,7 @@ def render_tab4(cfg: dict[str, Any], data: pd.DataFrame, market_df: pd.DataFrame
         if search_q and search_q.lower() not in a["sym"].lower() and search_q.lower() not in COIN_NAMES.get(a["sym"], "").lower():
             continue
 
-        logo = COIN_LOGOS.get(a["sym"], "https://cdn-icons-png.flaticon.com/512/197/197583.png") if a["sym"] != "THB" else "https://cdn-icons-png.flaticon.com/512/197/197583.png"
+        logo = get_coin_logo(a["sym"])
         sub_name = COIN_NAMES.get(a["sym"], "Thai Baht")
 
         html_rows += (
@@ -2786,7 +2787,7 @@ def render_tab4(cfg: dict[str, Any], data: pd.DataFrame, market_df: pd.DataFrame
             f'<div class="wl-col-act">'
             f'<span class="wl-act-link">ฝาก</span>'
             f'<span class="wl-act-link">ถอน</span>'
-            f'<span class="wl-act-link" style="color:#848e9c;">•••</span>'
+            f'<span style="color:#EAECEF; cursor:pointer;">•••</span>'
             f'</div>'
             f'</div>'
         )
