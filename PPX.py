@@ -20,12 +20,11 @@ UI ถูกเรียกใต้ `if __name__ == "__main__"` เท่าน
 
 MODEL_VERSION / CHANGELOG
 -------------------------
-v1.5.22             + [UI] อัปเดตหน้า Wallet: ลบไอคอน 👁️ ออกจากมูลค่าทั้งหมด, เปลี่ยนโลโก้ THB เป็นแบบแถบสีดำ-เหลือง-แดงให้ตรงตาม UI อ้างอิง
-v1.5.21             + [FIX] แก้ไขบั๊ก Streamlit เรนเดอร์ HTML ออกมาเป็นตัวอักษรดิบ (Code Block) ใน Tab 4 อันเกิดจาก String Indentation
-v1.5.20             + [FEATURE] เพิ่มระบบ "กระเป๋าเงิน" (Wallet Tab 4) สไตล์ Bitkub แสดงยอดรวม THB/USDT, วงเงินรายวัน, และตารางสินทรัพย์
-v1.5.19             + [UI] ปรับกราฟ 3D ใน Tab 1 ให้เป็นจุด (Scatter) ไล่สีรุ้ง (Rainbow) แทนเส้น เพื่อความเท่และดูง่ายขึ้น
-v1.5.18             + [FEATURE] เพิ่มกราฟราคา 3D แบบ Interactive ใน Tab 1
-v1.5.17             + [FIX] แก้กราฟ TradingView ไม่เปลี่ยนตามเมื่อคลิกเหรียญ
+v1.5.23             + [UI] จัดระเบียบ Tab 4 (Wallet): ลบปุ่ม Header และวงเงินต่อวันออกให้ดูสะอาดขึ้น, แก้โลโก้ THB ให้เป็นธงชาติไทยที่ถูกต้อง
+v1.5.22             + [UI] อัปเดตหน้า Wallet: ลบไอคอน 👁️ ออกจากมูลค่าทั้งหมด
+v1.5.21             + [FIX] แก้ไขบั๊ก Streamlit เรนเดอร์ HTML ออกมาเป็นตัวอักษรดิบ
+v1.5.20             + [FEATURE] เพิ่มระบบ "กระเป๋าเงิน" (Wallet Tab 4) สไตล์ Bitkub
+v1.5.19             + [UI] ปรับกราฟ 3D ใน Tab 1 ให้เป็นจุด (Scatter) ไล่สีรุ้ง (Rainbow) แทนเส้น
 """
 
 from __future__ import annotations
@@ -45,7 +44,7 @@ from typing import Any, Mapping, Optional
 import numpy as np
 import pandas as pd
 
-MODEL_VERSION = "1.5.22"
+MODEL_VERSION = "1.5.23"
 
 try:
     import yaml
@@ -109,6 +108,9 @@ COIN_NAMES = {
     "USDT": "Tether", "USDC": "USD Coin", "THB": "Thai Baht"
 }
 
+# ใช้ Base64 SVG ธงชาติไทยที่ถูกต้อง (แดง-ขาว-น้ำเงิน-ขาว-แดง)
+THB_LOGO_SVG = "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxMDAgMTAwIj48Y2xpcFBhdGggaWQ9ImMiPjxjaXJjbGUgY3g9IjUwIiBjeT0iNTAiIHI9IjUwIi8+PC9jbGlwUGF0aD48ZyBjbGlwLXBhdGg9InVybCgjYykiPjxyZWN0IHdpZHRoPSIxMDAiIGhlaWdodD0iMTciIGZpbGw9IiNFRDFDMjQiLz48cmVjdCB5PSIxNyIgd2lkdGg9IjEwMCIgaGVpZ2h0PSIxNyIgZmlsbD0iI2ZmZiIvPjxyZWN0IHk9IjM0IiB3aWR0aD0iMTAwIiBoZWlnaHQ9IjMyIiBmaWxsPSIjMjQxRDRGIi8+PHJlY3QgeT0iNjYiIHdpZHRoPSIxMDAiIGhlaWdodD0iMTciIGZpbGw9IiNmZmYiLz48cmVjdCB5PSI4MyIgd2lkdGg9IjEwMCIgaGVpZ2h0PSIxNyIgZmlsbD0iI0VEMUMyNCIvPjwvZz48L3N2Zz4="
+
 COIN_LOGOS = {
     "BTC": "https://assets.coingecko.com/coins/images/1/small/bitcoin.png",
     "ETH": "https://assets.coingecko.com/coins/images/279/small/ethereum.png",
@@ -121,7 +123,7 @@ COIN_LOGOS = {
     "XRP": "https://assets.coingecko.com/coins/images/44/small/xrp-symbol-white-128.png",
     "XLM": "https://assets.coingecko.com/coins/images/100/small/Stellar_symbol_black_RGB.png",
     "HBAR": "https://assets.coingecko.com/coins/images/3688/small/hbar.png",
-    "THB": "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxMDAiIGhlaWdodD0iMTAwIj48cmVjdCB3aWR0aD0iMzMuMzMiIGhlaWdodD0iMTAwIiBmaWxsPSIjMDAwMDAwIi8+PHJlY3QgeD0iMzMuMzMiIHdpZHRoPSIzMy4zMyIgaGVpZ2h0PSIxMDAiIGZpbGw9IiNGRkQ3MDAiLz48cmVjdCB4PSI2Ni42NiIgd2lkdGg9IjMzLjM0IiBoZWlnaHQ9IjEwMCIgZmlsbD0iI0ZGMDAwMCIvPjwvc3ZnPg==",
+    "THB": THB_LOGO_SVG,
 }
 
 LOCAL_TRADING_FEE_PCT = 0.0025
@@ -1274,16 +1276,8 @@ THEME_CSS = """
     .mk-sel { background: #0a5c33 !important; }
 
     /* Wallet Tab Styles */
-    .wl-btn-solid { background: #0ecb81; border: none; color: #fff; padding: 8px 24px; border-radius: 4px; font-weight: 600; cursor: pointer; font-size: 0.85rem; }
-    .wl-btn-out { background: transparent; border: 1px solid #2b3139; color: #EAECEF; padding: 8px 24px; border-radius: 4px; font-weight: 600; cursor: pointer; font-size: 0.85rem; transition: 0.2s; }
-    .wl-btn-out:hover { border-color: #0ecb81; color: #0ecb81; }
     .wl-box { background: #181a20; border: 1px solid #2b3139; border-radius: 8px; padding: 20px; }
     .wl-total-val { font-size: 2.2rem; font-weight: 700; color: #EAECEF; font-variant-numeric: tabular-nums; margin: 4px 0; }
-    .wl-lim-title { font-size: 0.8rem; font-weight: 600; color: #EAECEF; margin-bottom: 12px; }
-    .wl-lim-row { display: flex; justify-content: space-between; font-size: 0.7rem; color: #848e9c; margin-bottom: 4px; }
-    .wl-lim-val { color: #EAECEF; font-weight: 500; font-variant-numeric: tabular-nums; }
-    .wl-lim-bar { width: 100%; height: 4px; background: #2b3139; border-radius: 2px; margin-top: 8px; overflow: hidden; }
-    .wl-lim-fill { height: 100%; background: #0ecb81; width: 0%; }
     .wl-tbl-head { display: flex; padding: 12px 16px; border-bottom: 1px solid #2b3139; font-size: 0.75rem; color: #848e9c; }
     .wl-tbl-row { display: flex; padding: 16px; border-bottom: 1px solid #1f2329; align-items: center; }
     .wl-tbl-row:hover { background: #2b3139; }
@@ -2678,15 +2672,10 @@ def render_tab4(cfg: dict[str, Any], data: pd.DataFrame, market_df: pd.DataFrame
     total_usdt = total_thb / usdthb_current if usdthb_current > 0 else 0
     time_str = pd.Timestamp.now(tz="Asia/Bangkok").strftime("%H:%M:%S")
 
-    # Header
+    # Header (ไม่มีปุ่มฝาก/ถอน/ประวัติ ตามที่ร้องขอ)
     st.markdown(
-        f'<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:20px;">'
+        f'<div style="margin-bottom:20px;">'
         f'<h2 style="margin:0; color:#EAECEF; font-size:1.8rem;">กระเป๋าเงิน</h2>'
-        f'<div style="display:flex; gap:12px;">'
-        f'<button class="wl-btn-solid">ฝาก</button>'
-        f'<button class="wl-btn-out">ถอน</button>'
-        f'<button class="wl-btn-out">ประวัติการทำรายการ</button>'
-        f'</div>'
         f'</div>',
         unsafe_allow_html=True
     )
@@ -2698,43 +2687,6 @@ def render_tab4(cfg: dict[str, Any], data: pd.DataFrame, market_df: pd.DataFrame
         f'<div class="wl-total-val">{total_thb:,.2f} <span style="font-size:1.2rem; color:#848e9c;">THB</span></div>'
         f'<div style="font-size:0.9rem; color:#848e9c;">≈ {total_usdt:,.2f} USDT <span style="float:right; font-size:0.8rem;">อัปเดตล่าสุด: {time_str}</span></div>'
         f'</div>',
-        unsafe_allow_html=True
-    )
-
-    # Limits Box
-    st.markdown(
-        '<div style="margin-bottom: 24px;">'
-        '<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">'
-        '<div style="font-size:1.05rem; font-weight:700; color:#EAECEF;">วงเงินต่อวัน</div>'
-        '<button class="wl-btn-solid" style="padding:6px 12px; font-size:0.75rem;">เพิ่มวงเงินต่อวัน</button>'
-        '</div>'
-        '<div style="display:flex; gap:16px;">'
-        '<div class="wl-box" style="flex:1; padding:16px;">'
-        '<div class="wl-lim-title"><span style="color:#0ecb81;">💵</span> ฝากเงินบาท</div>'
-        '<div class="wl-lim-row"><span>วงเงินที่ใช้แล้ว (THB)</span><span>วงเงินการฝาก (THB)</span></div>'
-        '<div class="wl-lim-row"><span class="wl-lim-val">0.00</span><span class="wl-lim-val">4,000,000.00</span></div>'
-        '<div class="wl-lim-bar"><div class="wl-lim-fill" style="width:0%;"></div></div>'
-        '</div>'
-        '<div class="wl-box" style="flex:1; padding:16px;">'
-        '<div class="wl-lim-title"><span style="color:#0ecb81;">💵</span> ถอนเงินบาท</div>'
-        '<div class="wl-lim-row"><span>วงเงินที่ใช้แล้ว (THB)</span><span>วงเงินการถอน (THB)</span></div>'
-        '<div class="wl-lim-row"><span class="wl-lim-val">0.00</span><span class="wl-lim-val">4,000,000.00</span></div>'
-        '<div class="wl-lim-bar"><div class="wl-lim-fill" style="width:0%;"></div></div>'
-        '</div>'
-        '<div class="wl-box" style="flex:1; padding:16px;">'
-        '<div class="wl-lim-title"><span style="color:#0ecb81;">🪙</span> ฝากเหรียญ</div>'
-        '<div class="wl-lim-row"><span>วงเงินที่ใช้แล้ว (THB)</span><span>วงเงินการฝาก (THB)</span></div>'
-        '<div class="wl-lim-row"><span class="wl-lim-val">0.00</span><span class="wl-lim-val">4,000,000.00</span></div>'
-        '<div class="wl-lim-bar"><div class="wl-lim-fill" style="width:0%;"></div></div>'
-        '</div>'
-        '<div class="wl-box" style="flex:1; padding:16px;">'
-        '<div class="wl-lim-title"><span style="color:#0ecb81;">🚀</span> ถอนเหรียญ</div>'
-        '<div class="wl-lim-row"><span>วงเงินที่ใช้แล้ว (THB)</span><span>วงเงินการถอน (THB)</span></div>'
-        '<div class="wl-lim-row"><span class="wl-lim-val">0.00</span><span class="wl-lim-val">4,000,000.00</span></div>'
-        '<div class="wl-lim-bar"><div class="wl-lim-fill" style="width:0%;"></div></div>'
-        '</div>'
-        '</div>'
-        '</div>',
         unsafe_allow_html=True
     )
 
