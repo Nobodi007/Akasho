@@ -20,16 +20,10 @@ UI ถูกเรียกใต้ `if __name__ == "__main__"` เท่าน
 
 MODEL_VERSION / CHANGELOG
 -------------------------
+v1.5.18             + [FEATURE] เพิ่มกราฟราคา 3D แบบ Interactive (3D Price vs Volatility vs Time) ใน Tab 1 สำหรับวิเคราะห์มิติความเคลื่อนไหวของราคา
+v1.5.17             + [FIX] แก้กราฟ TradingView ไม่เปลี่ยนตามเมื่อคลิกเหรียญ (ปรับ container_id ให้เป็น dynamic ตามชื่อเหรียญ) และเพิ่ม asset ใน signature
 v1.5.16             + [FIX] ปุ่มคลิกเลือกเหรียญในรายการตลาด (Market list) ไม่คลุมเต็มแถวจริง
-                      เพราะ CSS ของปุ่มโปร่งใส (fav_/sel_) ขาด !important บาง property
-                      (left/width/right/z-index) ทำให้ค่าจาก Streamlit เอง override
-                      พื้นที่คลิกจึงแคบ/เพี้ยนบางจังหวะ คลิกแล้ว state ไม่เปลี่ยน กราฟเลย
-                      ไม่ตามเหรียญที่คลิก -> เติม !important ให้ครบทุก property
-v1.5.15             + [FIX] กู้คืน UI รายการเหรียญกลับเป็นดีไซน์ Bitkub เดิม (ปุ่มใสวางทับ) และแก้ Logic หลังบ้านให้กราฟเปลี่ยนตามเมื่อคลิก (ลบ _fragment, อัปเดต ID กราฟ)
-v1.5.12             + ขยายพื้นที่คลิกของแถวเหรียญให้คลุมทั้งแถว (กว้าง+สูง 100%) คลิกตรงไหนก็เปลี่ยนเหรียญ/กราฟ/ข้อมูลทันที
-v1.5.10             + แก้ราคาซ้อนทับ (จัดราคา/% เป็นคอลัมน์ขวาซ้อน 2 บรรทัด, โลโก้ไม่ถูกบีบ) และแท็บ "ปริมาณ" แสดง Vol เป็นบาท
-v1.5.9              + แก้ดีไซน์รายการเหรียญ (Market) ให้เหมือน Bitkub: วาดทั้งแถวเป็น HTML
-                      + ปุ่มดาว/ปุ่มเลือกเหรียญเป็นปุ่มโปร่งใสวางทับ โดยจับด้วย class `st-key-*`
+v1.5.15             + [FIX] กู้คืน UI รายการเหรียญกลับเป็นดีไซน์ Bitkub เดิม (ปุ่มใสวางทับ) และแก้ Logic หลังบ้านให้กราฟเปลี่ยนตามเมื่อคลิก
 """
 
 from __future__ import annotations
@@ -49,7 +43,7 @@ from typing import Any, Mapping, Optional
 import numpy as np
 import pandas as pd
 
-MODEL_VERSION = "1.5.16"
+MODEL_VERSION = "1.5.18"
 
 try:
     import yaml
@@ -1215,7 +1209,7 @@ THEME_CSS = """
     .oe-tab.active { color: #EAECEF; border-bottom: 2px solid #fcd535; padding-bottom: 6px; margin-bottom: -8px; }
     .oe-bal { display: flex; justify-content: space-between; font-size: 0.8rem; color: #848e9c; margin-bottom: 16px; }
 
-    /* ---------- Order buttons ---------- */
+    /* ---------- Order buttons (จับด้วย st-key-* แทน :contains) ---------- */
     .st-key-sim_send button { width: 100% !important; font-weight: 700; padding: 12px; color: #fff !important; border: none !important; }
     .st-key-sim_batch button { width: 100% !important; font-weight: 700; background: #fcd535 !important; color: #181a20 !important; border: none !important; }
 
@@ -1996,6 +1990,41 @@ def render_tab1(cfg: dict[str, Any], data: pd.DataFrame, data_err: Optional[str]
     section(f"📉 ราคาเรียลไทม์ — {asset}")
     render_tv_panel(asset)
 
+    # ---- 3D Interactive Chart Feature ----
+    section("🌐 มุมมองกราฟ 3D พิเศษ (3D Price & Volatility Surface)")
+    with st.expander("✨ เปิดดูกราฟ 3D สามมิติ (Interactive 3D Chart)", expanded=False):
+        st.caption("หมุนและซูมเพื่อดูความสัมพันธ์ระหว่าง วันที่, ราคาโลก (USD), และความผันผวน (Volatility)")
+        df_3d = bt.dropna().copy()
+        if len(df_3d) > 0:
+            fig_3d = go.Figure(data=[go.Scatter3d(
+                x=list(range(len(df_3d))),
+                y=df_3d["Global_USD"],
+                z=df_3d["Volatility_Pct"] * 100,
+                mode='lines',
+                line=dict(
+                    color=df_3d["Global_USD"],
+                    colorscale='Viridis',
+                    width=4
+                ),
+                text=df_3d.index.strftime('%Y-%m-%d'),
+                hovertemplate='วันที่: %{text}<br>ราคา: $%{y:,.2f}<br>ความผันผวน: %{z:.2f}%<extra></extra>'
+            )])
+            fig_3d.update_layout(
+                title=dict(text=f"3D Trajectory — {asset} (Price vs Volatility vs Time)", font=dict(size=14)),
+                scene=dict(
+                    xaxis_title='ลำดับเวลา (Time Steps)',
+                    yaxis_title='ราคาโลก (USD)',
+                    zaxis_title='ความผันผวน (%)',
+                    bgcolor='#181a20'
+                ),
+                template="plotly_dark",
+                height=500,
+                margin=dict(l=0, r=0, b=0, t=40),
+                paper_bgcolor='rgba(0,0,0,0)',
+                plot_bgcolor='rgba(0,0,0,0)'
+            )
+            st.plotly_chart(fig_3d, **WIDE)
+
     # ---- Performance ----
     section("📈 Performance Summary")
     r1 = st.columns(4)
@@ -2316,7 +2345,6 @@ def render_market_column_view(df: pd.DataFrame, mode: str, current_asset: str, u
             st.markdown(html, unsafe_allow_html=True)
             st.button("fav", key=f"fav_{mode}_{sym}",
                       on_click=_toggle_fav, args=(sym,))
-            # นำ st.rerun() ออก ใช้แค่ on_click=_select_asset ซึ่ง Streamlit จะ rerun ให้อัตโนมัติอยู่แล้ว
             st.button("select", key=f"sel_{mode}_{sym}",
                       on_click=_select_asset, args=(sym,))
 
