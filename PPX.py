@@ -20,13 +20,10 @@ UI ถูกเรียกใต้ `if __name__ == "__main__"` เท่าน
 
 MODEL_VERSION / CHANGELOG
 -------------------------
+v1.5.0              + Redesign Tab 3 (Simulator) เป็นรูปแบบ Pro Exchange Trading Terminal
+                      (มี Top Bar, Market List, Order Book จำลอง และ Order Entry Panel)
+                      + ปรับใช้ Dark Theme ขั้นสูง (Deep Navy/Black)
 v1.4.0              เพิ่ม Market Overview (รายการโปรด/ปริมาณ/% เพิ่ม/% ลด) ไว้ใน Tab 1
-                      + Multi-coin customer wallet (ถือได้หลายเหรียญพร้อมกัน ไม่รีเซ็ตเมื่อเปลี่ยนเหรียญ)
-                      + ปรับแก้ UI ตัดแถบ Navbar ออก และแก้บัคโลโก้เหรียญไม่ขึ้น
-                      + แก้ไขบักการประเมินมูลค่าพอร์ตลูกค้า (Cross-asset valuation)
-                      + แก้ไขบัค Markdown Code Block render HTML ดิบ
-                      + จำกัดรายชื่อเหรียญให้เหลือเฉพาะรายการ Bitkub ที่กำหนด
-                        (BTC, ETH, USDT, SOL, DOGE, SIRIHUB2, ADA, HBAR, LINK, USDC, XLM, XRP)
 """
 
 from __future__ import annotations
@@ -46,7 +43,7 @@ from typing import Any, Mapping, Optional
 import numpy as np
 import pandas as pd
 
-MODEL_VERSION = "1.4.0"
+MODEL_VERSION = "1.5.0"
 
 try:
     import yaml
@@ -99,8 +96,8 @@ GLOBAL_EXCHANGE_FEE_PRESET = {
 LOCAL_EXCHANGES = ["Bitkub"]
 
 SUPPORTED_ASSETS = [
-    "BTC", "ETH", "SOL", "DOGE", "ADA", "HBAR", "LINK", "XLM", "XRP",
-    "SIRIHUB2", "USDT", "USDC",
+    "BTC", "ETH", "SOL", "DOGE", "ADA", "HBAR", "LINK", "XLM", "XRP", "USDT", "USDC",
+    "ASTER", "LIT", "ZIG", "PEPE", "VVV", "ZAMA", "STRK",
 ]
 STABLECOINS = ["USDT", "USDC"]
 
@@ -115,7 +112,6 @@ TV_LOCAL_SYMBOL = {
     "BTC": "BITKUB:BTCTHB", "ETH": "BITKUB:ETHTHB", "SOL": "BITKUB:SOLTHB",
     "DOGE": "BITKUB:DOGETHB", "ADA": "BITKUB:ADATHB", "XRP": "BITKUB:XRPTHB",
     "LINK": "BITKUB:LINKTHB", "XLM": "BITKUB:XLMTHB", "HBAR": "BITKUB:HBARTHB",
-    "SIRIHUB2": "BITKUB:SIRIHUB2THB",
     "USDT": "BITKUB:USDTTHB", "USDC": "BITKUB:USDCTHB",
 }
 TV_GLOBAL_SYMBOL = {a: f"BINANCE:{a}USDT" for a in SUPPORTED_ASSETS}
@@ -159,7 +155,6 @@ FX_PROXY: dict[str, Any] = {
 
 class ConfigError(ValueError):
     pass
-
 
 CONFIG_ENV_VAR = "XSPRING_CONFIG"
 DEFAULT_CONFIG_PATH = _HERE / "config.yaml"
@@ -211,7 +206,6 @@ def _num(name: str, v: Any, kind: str, lo: Optional[float], hi: Optional[float])
     if hi is not None and f > hi:
         raise ConfigError(f"{name}: ต้อง <= {hi} (ได้ {v!r})")
     return int(f) if kind == "int" else f
-
 
 def validate_config(doc: Mapping[str, Any]) -> dict[str, Any]:
     valid_keys = (set(_SCALAR_SPECS) | set(_MAP_SPECS) | {"ui_defaults", "fx_proxy"})
@@ -269,7 +263,6 @@ def validate_config(doc: Mapping[str, Any]) -> dict[str, Any]:
         raise ConfigError("risk_sample_warn_days ต้อง >= min_risk_sample_days")
     return out
 
-
 def apply_config(overrides: Mapping[str, Any]) -> None:
     g = globals()
     for key in _SCALAR_SPECS:
@@ -280,7 +273,6 @@ def apply_config(overrides: Mapping[str, Any]) -> None:
             g[key.upper()].update(overrides[key])
     UI_DEFAULTS.update(overrides.get("ui_defaults", {}))
     FX_PROXY.update(overrides.get("fx_proxy", {}))
-
 
 def load_external_config(path: Optional[str] = None) -> tuple[dict[str, Any], Optional[Path], Optional[str]]:
     explicit = path or os.environ.get(CONFIG_ENV_VAR)
@@ -300,13 +292,11 @@ def load_external_config(path: Optional[str] = None) -> tuple[dict[str, Any], Op
         raise ConfigError(f"{p.name}: ระดับบนสุดต้องเป็น map")
     return validate_config(doc), p, hashlib.sha256(raw).hexdigest()[:12]
 
-
 def _bootstrap_config() -> None:
     overrides, path, sha = load_external_config()
     apply_config(overrides)
     CONFIG_INFO.update(source=str(path) if path else None, sha256=sha,
                        applied_keys=sorted(overrides))
-
 
 _bootstrap_config()
 
@@ -329,16 +319,13 @@ def fmt_num(value: Any, force_sign: bool = False) -> str:
         num = f"{v:,.2f}"
     return f"{sign}{num}"
 
-
 def fmt_baht(value: Any, force_sign: bool = False) -> str:
     return f"฿ {fmt_num(value, force_sign)}"
-
 
 def fmt_coin(value: float, symbol: str = "") -> str:
     v = abs(float(value))
     d = 6 if v < 1 else (4 if v < 1000 else 2)
     return f"{value:,.{d}f}" + (f" {symbol}" if symbol else "")
-
 
 def calc_thb_withdrawal_fee(amount_thb: float, bank_type: str,
                             ktb_fee_thb: float = 15.0) -> float:
@@ -349,7 +336,6 @@ def calc_thb_withdrawal_fee(amount_thb: float, bank_type: str,
     if amount_thb <= THB_WD_LARGE_THRESHOLD:
         return THB_WD_FEE_OTHER_SMALL
     return THB_WD_FEE_OTHER_LARGE
-
 
 def apply_fx_limit(hedge_usd: pd.Series, index: pd.DatetimeIndex,
                    fx_limit: float) -> tuple[np.ndarray, np.ndarray]:
@@ -365,7 +351,6 @@ def apply_fx_limit(hedge_usd: pd.Series, index: pd.DatetimeIndex,
             allowed.append(0)
         usage.append(used)
     return np.array(allowed), np.array(usage)
-
 
 def _risk_stats(r: pd.Series) -> Optional[dict[str, Any]]:
     r = r.replace([np.inf, -np.inf], np.nan).dropna()
@@ -386,27 +371,22 @@ def _risk_stats(r: pd.Series) -> Optional[dict[str, Any]]:
         "insufficient_sample": len(r) < RISK_SAMPLE_WARN_DAYS,
     }
 
-
 def risk_profile(px: pd.Series) -> Optional[dict[str, Any]]:
     return _risk_stats(np.log(px / px.shift(1)))
-
 
 def safety_stock_factor(net_bias: float, flow_cv: float, lag_days: float,
                         z_alpha: float) -> float:
     return (max(0.0, net_bias) * lag_days
             + z_alpha * flow_cv * np.sqrt(lag_days)) / 30.0
 
-
 def crypto_haircut(es99: float, lag_days: float) -> float:
     return float(min(es99 * np.sqrt(lag_days), 0.95))
-
 
 def blended_custody_rate(hot_pct: float, cold_domestic_pct: float,
                          cold_foreign_rate: float) -> float:
     return (hot_pct * HOT_WALLET_NC_RATE
             + (1 - hot_pct) * (cold_domestic_pct * COLD_DOMESTIC_NC_RATE
                                + (1 - cold_domestic_pct) * cold_foreign_rate))
-
 
 def nc_snapshot(stock_thb: float, total_capital: float, cex_margin: float,
                 liab: float, h_crypto: float, h_cex: float, fixed_min_nc: float,
@@ -426,29 +406,24 @@ def nc_snapshot(stock_thb: float, total_capital: float, cex_margin: float,
         "custody_nc": custody_nc,
     }
 
-
 def blend_hedge_fee(taker_fee: float, maker_fee: float, maker_ratio: float) -> float:
     r = min(max(float(maker_ratio), 0.0), 1.0)
     return taker_fee * (1.0 - r) + maker_fee * r
 
-
 def default_maker_fee_pct(exchange: str) -> float:
     return GLOBAL_EXCHANGE_MAKER_FEE_PRESET.get(
         exchange, GLOBAL_EXCHANGE_FEE_PRESET.get(exchange, 0.0))
-
 
 def depth_participation(order_usd: float, market_depth_usd: float) -> float:
     if not market_depth_usd or market_depth_usd <= 0 or order_usd <= 0:
         return 0.0
     return float(order_usd) / float(market_depth_usd)
 
-
 def market_impact_rate(order_usd: float, market_depth_usd: float,
                        impact_penalty: float) -> float:
     if impact_penalty is None or impact_penalty <= 0:
         return 0.0
     return depth_participation(order_usd, market_depth_usd) * float(impact_penalty)
-
 
 def align_usdthb(official: pd.Series, index: pd.DatetimeIndex,
                  proxy: Optional[pd.Series] = None) -> tuple[pd.Series, pd.Series]:
@@ -473,7 +448,6 @@ def align_usdthb(official: pd.Series, index: pd.DatetimeIndex,
     return (pd.Series(fx_arr, index=index, name="USDTHB"),
             pd.Series(src, index=index, name="FX_Source"))
 
-
 def parse_udf_history(payload: Any) -> pd.Series:
     if not isinstance(payload, Mapping) or payload.get("s") != "ok":
         raise ValueError("response ไม่ใช่รูปแบบ UDF history ที่ s == 'ok'")
@@ -488,7 +462,6 @@ def parse_udf_history(payload: Any) -> pd.Series:
     if s.empty:
         raise ValueError("ไม่มีแถวราคาที่ใช้ได้หลังทำความสะอาด")
     return s
-
 
 def sim_defaults(asset_name: str, start_date_val: Any, spot_usd: float,
                  usdthb: float, target_stock_thb: float) -> dict[str, Any]:
@@ -505,7 +478,6 @@ def sim_defaults(asset_name: str, start_date_val: Any, spot_usd: float,
         "current_date": start_date_val,
         "customer_coins": {},
     }
-
 
 def sim_config_signature(ctx: Mapping[str, Any], target_stock_thb: float,
                          start_date: Any, end_date: Any) -> tuple:
@@ -528,7 +500,6 @@ def sim_config_signature(ctx: Mapping[str, Any], target_stock_thb: float,
     values.append(str(start_date))
     values.append(str(end_date))
     return tuple(values)
-
 
 def sim_normalize_state(sim: Any, asset: str, start_date_val: Any,
                         spot_usd: float, usdthb: float,
@@ -577,7 +548,6 @@ def sim_normalize_state(sim: Any, asset: str, start_date_val: Any,
     sim["asset"] = asset
     sim["target_thb"] = float(target_stock_thb)
     return sim
-
 
 def execute_order(
     sim: dict[str, Any], side: str, amount_thb: float, order_date: pd.Timestamp,
@@ -1131,93 +1101,89 @@ def to_csv_bytes_with_assumptions(df: pd.DataFrame, assumptions: Mapping[str, An
 
 THEME_CSS = """
 <style>
-    .block-container { padding-top: 2rem; padding-bottom: 3rem; }
+    .block-container { padding-top: 2rem; padding-bottom: 3rem; max-width: 98% !important; }
     .xs-hero {
-        background: linear-gradient(135deg, #0f2027 0%, #203a43 50%, #2c5364 100%);
-        border: 1px solid rgba(0,210,106,0.25);
-        border-radius: 16px; padding: 1.5rem 1.75rem; margin-bottom: 1.25rem;
+        background: linear-gradient(135deg, #0b0e11 0%, #181a20 50%, #1e2329 100%);
+        border: 1px solid #2b3139;
+        border-radius: 12px; padding: 1.5rem 1.75rem; margin-bottom: 1.25rem;
     }
-    .xs-hero h1 { margin:0; font-size:1.9rem; font-weight:800; color:#FAFAFA;
+    .xs-hero h1 { margin:0; font-size:1.9rem; font-weight:800; color:#EAECEF;
                   letter-spacing:-0.5px; }
-    .xs-hero p  { margin:.4rem 0 0 0; color:#9CA3AF; font-size:0.92rem; }
+    .xs-hero p  { margin:.4rem 0 0 0; color:#848e9c; font-size:0.92rem; }
     .xs-pill {
-        display:inline-block; background:rgba(0,210,106,0.12); color:#00D26A;
-        border:1px solid rgba(0,210,106,0.35); border-radius:999px;
-        padding:2px 12px; font-size:0.72rem; font-weight:600;
+        display:inline-block; background:rgba(14,203,129,0.1); color:#0ecb81;
+        border:1px solid rgba(14,203,129,0.2); border-radius:4px;
+        padding:2px 10px; font-size:0.75rem; font-weight:600;
         margin-right:6px; margin-top:10px;
     }
-    .xs-ver { color:#6B7280; font-size:.7rem; margin-top:8px; }
-    .stTabs [data-baseweb="tab-list"] { gap: 6px; border-bottom:1px solid #1f2937; }
+    .xs-ver { color:#5e6673; font-size:.7rem; margin-top:8px; }
+    .stTabs [data-baseweb="tab-list"] { gap: 8px; border-bottom:1px solid #2b3139; }
     .stTabs [data-baseweb="tab"] {
-        height: 46px; padding: 0 20px; background:#111827;
-        border-radius: 10px 10px 0 0; font-weight:600;
+        height: 40px; padding: 0 16px; background: transparent;
+        border-radius: 0; font-weight:600; color: #848e9c;
     }
-    .stTabs [aria-selected="true"] { background:#1f2937 !important; color:#00D26A !important; }
-    div[data-testid="stMetricValue"] { font-size:1.4rem; }
+    .stTabs [aria-selected="true"] { background: transparent !important; color:#EAECEF !important; border-bottom: 2px solid #0ecb81 !important; }
+    div[data-testid="stMetricValue"] { font-size:1.4rem; color: #EAECEF; }
     .xs-sec {
-        font-size:1.05rem; font-weight:700; color:#FAFAFA;
-        border-left:3px solid #00D26A; padding-left:10px; margin:1.2rem 0 .6rem 0;
+        font-size:1.05rem; font-weight:700; color:#EAECEF;
+        border-left:3px solid #0ecb81; padding-left:10px; margin:1.2rem 0 .6rem 0;
     }
-    iframe { border-radius: 12px; }
+    iframe { border-radius: 8px; }
 
     .xs-gauge { margin:0 0 .35rem 0; }
     .xs-gauge .top { display:flex; justify-content:space-between; font-size:.8rem;
-                     color:#9CA3AF; margin-bottom:5px; }
-    .xs-gauge .top b { color:#FAFAFA; font-variant-numeric:tabular-nums; }
-    .xs-gauge .track { height:10px; background:#1f2937; border-radius:999px; overflow:hidden; }
-    .xs-gauge .fill { height:100%; border-radius:999px; transition:width .4s ease; }
-    .xs-gauge .sub { font-size:.74rem; color:#6B7280; margin-top:4px; }
+                     color:#848e9c; margin-bottom:5px; }
+    .xs-gauge .top b { color:#EAECEF; font-variant-numeric:tabular-nums; }
+    .xs-gauge .track { height:6px; background:#2b3139; border-radius:2px; overflow:hidden; }
+    .xs-gauge .fill { height:100%; border-radius:2px; transition:width .4s ease; }
+    .xs-gauge .sub { font-size:.74rem; color:#5e6673; margin-top:4px; }
 
-    .xs-tl { position:relative; padding-left:34px; }
-    .xs-tl::before { content:""; position:absolute; left:11px; top:14px; bottom:14px;
-                     width:2px; background:linear-gradient(180deg,#00D26A 0%,#374151 100%); }
-    .xs-tl .xs-step { position:relative; --c:#00D26A; border:1px solid #1f2937;
-                      border-radius:10px; padding:12px 16px; margin-bottom:10px;
-                      background:#0f1621; }
-    .xs-tl .xs-step.warn  { --c:#F59E0B; }
-    .xs-tl .xs-step.block { --c:#FF4B4B; }
+    .xs-tl { position:relative; padding-left:24px; }
+    .xs-tl::before { content:""; position:absolute; left:7px; top:14px; bottom:14px;
+                     width:2px; background:#2b3139; }
+    .xs-tl .xs-step { position:relative; --c:#0ecb81; border:1px solid #2b3139;
+                      border-radius:8px; padding:12px 16px; margin-bottom:10px;
+                      background:#181a20; }
+    .xs-tl .xs-step.warn  { --c:#fcd535; }
+    .xs-tl .xs-step.block { --c:#f6465d; }
     .xs-tl .xs-step::before {
-        content:attr(data-n); position:absolute; left:-34px; top:11px;
-        width:24px; height:24px; border-radius:50%; background:#0f1621;
-        border:2px solid var(--c); color:#FAFAFA; font-size:.72rem; font-weight:700;
+        content:attr(data-n); position:absolute; left:-24px; top:11px;
+        width:18px; height:18px; border-radius:50%; background:#181a20;
+        border:2px solid var(--c); color:#EAECEF; font-size:.65rem; font-weight:700;
         display:flex; align-items:center; justify-content:center;
-        box-shadow:0 0 0 4px #0E1117;
     }
-    .xs-step h4 { margin:0 0 2px 0; font-size:.95rem; color:#FAFAFA; font-weight:700;
+    .xs-step h4 { margin:0 0 2px 0; font-size:.9rem; color:#EAECEF; font-weight:600;
                   display:flex; justify-content:space-between; gap:12px;
                   align-items:baseline; }
-    .xs-step .xs-tag { font-size:.7rem; font-weight:700; padding:2px 10px;
-                       border-radius:999px; white-space:nowrap; }
-    .xs-step.pass  .xs-tag { background:rgba(0,210,106,.12);  color:#00D26A; }
-    .xs-step.warn  .xs-tag { background:rgba(245,158,11,.12); color:#F59E0B; }
-    .xs-step.block .xs-tag { background:rgba(255,75,75,.12);  color:#FF4B4B; }
-    .xs-step p  { margin:6px 0 0 0; color:#9CA3AF; font-size:.84rem; }
+    .xs-step .xs-tag { font-size:.65rem; font-weight:600; padding:2px 8px;
+                       border-radius:4px; white-space:nowrap; }
+    .xs-step.pass  .xs-tag { background:rgba(14,203,129,.1);  color:#0ecb81; }
+    .xs-step.warn  .xs-tag { background:rgba(252,213,53,.1); color:#fcd535; }
+    .xs-step.block .xs-tag { background:rgba(246,70,93,.1);  color:#f6465d; }
+    .xs-step p  { margin:4px 0 0 0; color:#848e9c; font-size:.8rem; }
     .xs-row { display:flex; justify-content:space-between; gap:14px; padding:3px 0;
-              border-bottom:1px dotted #1f2937; font-size:.85rem; color:#D1D5DB; }
+              border-bottom:1px dashed #2b3139; font-size:.8rem; color:#b7bdc6; }
     .xs-row:last-child { border-bottom:none; }
-    .xs-row b { color:#FAFAFA; font-variant-numeric:tabular-nums; }
-    .xs-tot { border-top:1px solid #374151; margin-top:6px; padding-top:7px; font-weight:700; }
-    .xs-audit-row { font-size:.78rem; color:#D1D5DB; border-bottom:1px dotted #1f2937;
+    .xs-row b { color:#EAECEF; font-variant-numeric:tabular-nums; }
+    .xs-tot { border-top:1px solid #2b3139; margin-top:6px; padding-top:7px; font-weight:600; }
+    .xs-audit-row { font-size:.75rem; color:#b7bdc6; border-bottom:1px dashed #2b3139;
                     padding:4px 0; }
-    .xs-audit-row b { color:#F59E0B; }
-    .xs-foot { color:#4B5563; font-size:.72rem; text-align:center; margin-top:2.5rem;
-               padding-top:1rem; border-top:1px solid #1f2937; }
+    .xs-audit-row b { color:#fcd535; }
+    .xs-foot { color:#5e6673; font-size:.7rem; text-align:center; margin-top:2.5rem;
+               padding-top:1rem; border-top:1px solid #2b3139; }
+
+    /* Custom Exchange Simulator UI Styling */
+    button[data-testid="baseButton-secondary"]:has(div:contains("ซื้อ")) {
+        background-color: #0ecb81 !important; color: white !important; border: none !important; width: 100% !important; font-weight: bold; padding: 12px !important;
+    }
+    button[data-testid="baseButton-secondary"]:has(div:contains("ขาย")) {
+        background-color: #f6465d !important; color: white !important; border: none !important; width: 100% !important; font-weight: bold; padding: 12px !important;
+    }
+    button[data-testid="baseButton-secondary"]:has(div:contains("สุ่มออเดอร์")) {
+        background-color: #fcd535 !important; color: #181a20 !important; border: none !important; font-weight: bold; width: 100% !important;
+    }
 </style>
 """
-
-HERO_HTML = f"""
-<div class="xs-hero">
-  <h1>🏦 XSpring — Digital Asset Dealer Suite</h1>
-  <p>Backtest 5 ปีย้อนหลัง + Liquidity &amp; Capital Planner + Time-Travel Order Journey</p>
-  <span class="xs-pill">Back-to-Back Hedging</span>
-  <span class="xs-pill">FX Limit Engine</span>
-  <span class="xs-pill">NCR/NC Capital Planner</span>
-  <span class="xs-pill">Time-Travel Simulation</span>
-  <div class="xs-ver">Model v{MODEL_VERSION} · สูตรคำนวณทั้งหมดอยู่ใน LAYER 1 ของไฟล์นี้
-  (ดู "Methodology" ในแท็บ Capital Planner)</div>
-</div>
-"""
-
 
 def _sv_tuple():
     try:
@@ -1226,12 +1192,10 @@ def _sv_tuple():
     except Exception:
         return (1, 40)
 
-
 if HAS_UI and _sv_tuple() >= (1, 49):
     WIDE = {"width": "stretch"}
 else:
     WIDE = {"use_container_width": True}
-
 
 def _reformat_comma_key(key):
     raw = st.session_state.get(key, "")
@@ -1241,7 +1205,6 @@ def _reformat_comma_key(key):
         st.session_state[key] = f"{num:,.0f}" if num == int(num) else f"{num:,.2f}"
     except ValueError:
         pass
-
 
 def comma_number_input(label, value, min_value=None, key=None, help=None):
     if key not in st.session_state:
@@ -1257,54 +1220,49 @@ def comma_number_input(label, value, min_value=None, key=None, help=None):
         num = float(min_value)
     return num
 
-
 def colored_metric(label, display_value, raw_value=None, sub_text=None,
                    font_size="1.5rem"):
     if raw_value is None:
-        color = "#FAFAFA"
+        color = "#EAECEF"
     else:
-        color = "#00D26A" if raw_value >= 0 else "#FF4B4B"
+        color = "#0ecb81" if raw_value >= 0 else "#f6465d"
     if sub_text:
-        sub = (f'<div style="font-size:.78rem;color:{color};opacity:.85;'
+        sub = (f'<div style="font-size:.75rem;color:{color};opacity:.85;'
                f'margin-top:3px;">{sub_text}</div>')
     else:
         sub = ""
     st.markdown(
         f'<div style="padding:.35rem 0 .6rem 0;">'
-        f'<div style="font-size:.82rem;color:#9CA3AF;margin-bottom:4px;">{label}</div>'
+        f'<div style="font-size:.8rem;color:#848e9c;margin-bottom:4px;">{label}</div>'
         f'<div style="font-size:{font_size};font-weight:700;color:{color};'
         f'white-space:nowrap;overflow:hidden;text-overflow:ellipsis;'
         f'line-height:1.25;">{display_value}</div>{sub}</div>',
         unsafe_allow_html=True,
     )
 
-
 def metric_card(col, label, value, raw_value=None, sub_text=None, font_size="1.5rem"):
     with col:
         with st.container(border=True):
             colored_metric(label, value, raw_value, sub_text, font_size)
 
-
 def section(title):
     st.markdown(f'<div class="xs-sec">{title}</div>', unsafe_allow_html=True)
 
-
 def verdict_box(ok, title, detail, warn=False):
     if warn and ok:
-        bg, bd, ic = "rgba(245,158,11,.10)", "#F59E0B", "⚠️"
+        bg, bd, ic = "rgba(252,213,53,.1)", "#fcd535", "⚠️"
     elif ok:
-        bg, bd, ic = "rgba(0,210,106,.10)", "#00D26A", "✅"
+        bg, bd, ic = "rgba(14,203,129,.1)", "#0ecb81", "✅"
     else:
-        bg, bd, ic = "rgba(255,75,75,.10)", "#FF4B4B", "🚨"
+        bg, bd, ic = "rgba(246,70,93,.1)", "#f6465d", "🚨"
     st.markdown(
-        f"<div style='background:{bg};border-left:4px solid {bd};border-radius:8px;"
-        f"padding:12px 16px;margin-bottom:10px;'>"
-        f"<div style='font-weight:700;color:{bd};font-size:.95rem;'>{ic} {title}</div>"
-        f"<div style='color:#D1D5DB;font-size:.84rem;margin-top:4px;'>{detail}</div>"
+        f"<div style='background:{bg};border-left:3px solid {bd};border-radius:4px;"
+        f"padding:10px 14px;margin-bottom:10px;'>"
+        f"<div style='font-weight:600;color:{bd};font-size:.9rem;'>{ic} {title}</div>"
+        f"<div style='color:#b7bdc6;font-size:.8rem;margin-top:4px;'>{detail}</div>"
         f"</div>",
         unsafe_allow_html=True,
     )
-
 
 def gauge_bar(label, used, limit, value_text="", sub="", warn_at=0.70, crit_at=0.90):
     if limit is None or limit <= 0:
@@ -1312,11 +1270,11 @@ def gauge_bar(label, used, limit, value_text="", sub="", warn_at=0.70, crit_at=0
     else:
         pct = max(0.0, used / limit)
     if pct < warn_at:
-        color = "#00D26A"
+        color = "#0ecb81"
     elif pct < crit_at:
-        color = "#F59E0B"
+        color = "#fcd535"
     else:
-        color = "#FF4B4B"
+        color = "#f6465d"
     width = min(pct, 1.0) * 100
     text = value_text or f"{pct * 100:.0f}%"
     sub_html = f"<div class='sub'>{sub}</div>" if sub else ""
@@ -1329,7 +1287,6 @@ def gauge_bar(label, used, limit, value_text="", sub="", warn_at=0.70, crit_at=0
         f"{sub_html}</div>",
         unsafe_allow_html=True,
     )
-
 
 def step_html(number, title, status, note="", rows=None, total=None):
     tag = {"pass": "ผ่าน", "warn": "เฝ้าระวัง", "block": "ติดด่าน"}[status]
@@ -1347,7 +1304,6 @@ def step_html(number, title, status, note="", rows=None, total=None):
             f"<h4><span>{title}</span><span class='xs-tag'>{tag}</span></h4>"
             f"{note_html}{body_html}</div>")
 
-
 def render_timeline(steps):
     ordered = sorted(steps, key=lambda x: x["n"])
     html = "".join(
@@ -1356,7 +1312,6 @@ def render_timeline(steps):
         for s in ordered
     )
     st.markdown(f"<div class='xs-tl'>{html}</div>", unsafe_allow_html=True)
-
 
 def render_tradingview(symbol, container_id, height=500, interval="D", studies=None):
     studies_js = str(studies or []).replace("'", '"')
@@ -1379,34 +1334,32 @@ def render_tradingview(symbol, container_id, height=500, interval="D", studies=N
           "locale": "th_TH",
           "width": "100%",
           "height": {height},
-          "toolbar_bg": "#0E1117",
+          "toolbar_bg": "#181a20",
           "enable_publishing": false,
           "hide_side_toolbar": false,
           "allow_symbol_change": true,
           "studies": {studies_js},
           "overrides": {{
-            "paneProperties.background": "#0E1117",
+            "paneProperties.background": "#181a20",
             "paneProperties.backgroundType": "solid",
-            "paneProperties.vertGridProperties.color": "#1f2937",
-            "paneProperties.horzGridProperties.color": "#1f2937",
-            "mainSeriesProperties.candleStyle.upColor": "#00D26A",
-            "mainSeriesProperties.candleStyle.downColor": "#FF4B4B",
-            "mainSeriesProperties.candleStyle.borderUpColor": "#00D26A",
-            "mainSeriesProperties.candleStyle.borderDownColor": "#FF4B4B",
-            "mainSeriesProperties.candleStyle.wickUpColor": "#00D26A",
-            "mainSeriesProperties.candleStyle.wickDownColor": "#FF4B4B"
+            "paneProperties.vertGridProperties.color": "#2b3139",
+            "paneProperties.horzGridProperties.color": "#2b3139",
+            "mainSeriesProperties.candleStyle.upColor": "#0ecb81",
+            "mainSeriesProperties.candleStyle.downColor": "#f6465d",
+            "mainSeriesProperties.candleStyle.borderUpColor": "#0ecb81",
+            "mainSeriesProperties.candleStyle.borderDownColor": "#f6465d",
+            "mainSeriesProperties.candleStyle.wickUpColor": "#0ecb81",
+            "mainSeriesProperties.candleStyle.wickDownColor": "#f6465d"
           }}
         }});
       }})();
     </script>"""
     components.html(html, height=height + 8)
 
-
 def render_market_table(df: pd.DataFrame, mode: str):
     if df.empty:
         st.info("ไม่มีข้อมูลตลาดในขณะนี้")
         return
-
     if mode == "favorite":
         view = df[df["is_favorite"]].sort_values("volume", ascending=False)
     elif mode == "volume":
@@ -1417,14 +1370,12 @@ def render_market_table(df: pd.DataFrame, mode: str):
         view = df.sort_values("pct_change", ascending=True)
     else:
         view = df
-
     for _, row in view.head(15).iterrows():
-        color = "#00D26A" if row["pct_change"] >= 0 else "#FF4B4B"
+        color = "#0ecb81" if row["pct_change"] >= 0 else "#f6465d"
         c1, c2, c3 = st.columns([2, 2, 2])
         c1.markdown(f"**{row['symbol']}**")
         c2.markdown(f"{row['price_usd']:,.4f}")
         c3.markdown(f"<span style='color:{color}'>{row['pct_change']:+.2f}%</span> · {row['volume']:,.0f}", unsafe_allow_html=True)
-
 
 @_fragment
 def render_tv_panel(asset: str) -> None:
@@ -1451,7 +1402,6 @@ def render_tv_panel(asset: str) -> None:
             st.caption(f"🌐 ราคาโลก — `{global_sym}`")
             render_tradingview(global_sym, "tv_cmp_global", 420)
 
-
 # =========================================================================
 # LAYER 4 — AUDIT TRAIL
 # =========================================================================
@@ -1459,10 +1409,8 @@ def render_tv_panel(asset: str) -> None:
 AUDIT_LOG_ENV_VAR = "XSPRING_AUDIT_LOG"
 AUDIT_ACTOR_ENV_VAR = "XSPRING_USER"
 
-
 def audit_log_path() -> Path:
     return Path(os.environ.get(AUDIT_LOG_ENV_VAR) or (_HERE / "audit_log.jsonl"))
-
 
 def _json_safe(v: Any) -> Any:
     if v is None or isinstance(v, (str, bool)):
@@ -1479,7 +1427,6 @@ def _json_safe(v: Any) -> Any:
     if isinstance(v, (list, tuple)):
         return [_json_safe(x) for x in v]
     return str(v)
-
 
 def build_audit_records(prev: Optional[Mapping[str, Any]], current: Mapping[str, Any], *,
                         session_id: str, actor: str = "unknown",
@@ -1499,7 +1446,6 @@ def build_audit_records(prev: Optional[Mapping[str, Any]], current: Mapping[str,
                             "old": _json_safe(old_val), "new": _json_safe(new_val)})
     return records
 
-
 def append_audit_records(records: list[dict[str, Any]], path: Optional[Path] = None) -> None:
     if not records:
         return
@@ -1510,7 +1456,6 @@ def append_audit_records(records: list[dict[str, Any]], path: Optional[Path] = N
             fh.write(json.dumps(rec, ensure_ascii=False) + "\n")
         fh.flush()
         os.fsync(fh.fileno())
-
 
 def read_audit_records(path: Optional[Path] = None, limit: Optional[int] = None) -> list[dict[str, Any]]:
     p = Path(path) if path else audit_log_path()
@@ -1528,7 +1473,6 @@ def read_audit_records(path: Optional[Path] = None, limit: Optional[int] = None)
                 continue
     return out[-limit:] if limit else out
 
-
 def _current_actor() -> str:
     try:
         email = getattr(st.user, "email", None)
@@ -1537,7 +1481,6 @@ def _current_actor() -> str:
     except Exception:
         pass
     return os.environ.get(AUDIT_ACTOR_ENV_VAR) or "unknown"
-
 
 def _audit_log_param_changes(current_params: Mapping[str, Any]) -> None:
     prev = st.session_state.get("audit_prev_params")
@@ -1567,7 +1510,6 @@ def _audit_log_param_changes(current_params: Mapping[str, Any]) -> None:
     except OSError as e:
         st.session_state.audit_write_error = f"{audit_log_path()}: {e}"
     st.session_state.audit_prev_params = dict(current_params)
-
 
 def render_audit_log_sidebar():
     log = st.session_state.get("audit_log", [])
@@ -2112,11 +2054,11 @@ def render_tab1(cfg: dict[str, Any], data: pd.DataFrame, data_err: Optional[str]
         text=wf_text, textposition="outside",
         connector={"line": {"color": "#374151"}},
         increasing={"marker": {"color": "#00D26A"}},
-        decreasing={"marker": {"color": "#FF4B4B"}},
+        decreasing={"marker": {"color": "#f6465d"}},
         totals={"marker": {"color": "#3B82F6"}},
     ))
     fig_wf.update_layout(template="plotly_dark", height=440, showlegend=False,
-                         margin=dict(t=40, b=20), yaxis_title="THB")
+                         margin=dict(t=40, b=20), yaxis_title="THB", paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)')
     st.plotly_chart(fig_wf, **WIDE)
 
     # ---- Cumulative P&L ----
@@ -2124,19 +2066,19 @@ def render_tab1(cfg: dict[str, Any], data: pd.DataFrame, data_err: Optional[str]
     fig = go.Figure()
     fig.add_trace(go.Scatter(
         x=bt.index, y=bt["Actual_Cum_PnL"], name="Cumulative P&L",
-        line=dict(color="#00D26A", width=2.2), fill="tozeroy",
-        fillcolor="rgba(0,210,106,0.12)",
+        line=dict(color="#0ecb81", width=2.2), fill="tozeroy",
+        fillcolor="rgba(14,203,129,0.12)",
     ))
     fig.add_trace(go.Scatter(
         x=bt.index, y=running_max, name="Peak Equity",
-        line=dict(color="#6B7280", width=1, dash="dot"),
+        line=dict(color="#848e9c", width=1, dash="dot"),
     ))
     hits = bt[bt["FX_Limit_Hit"] == 1]
     if not hits.empty:
         fig.add_trace(go.Scatter(
             x=hits.index, y=hits["Actual_Cum_PnL"], mode="markers",
             name="FX Limit Hit",
-            marker=dict(color="#FF4B4B", size=5, symbol="x"),
+            marker=dict(color="#f6465d", size=5, symbol="x"),
         ))
     fig.update_layout(
         title=(f"{asset} @ {cfg['global_exchange']} · "
@@ -2144,6 +2086,7 @@ def render_tab1(cfg: dict[str, Any], data: pd.DataFrame, data_err: Optional[str]
         template="plotly_dark", hovermode="x unified", height=480,
         margin=dict(t=50, b=20), yaxis_title="THB",
         legend=dict(orientation="h", y=1.02, yanchor="bottom"),
+        paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)'
     )
     st.plotly_chart(fig, **WIDE)
 
@@ -2153,12 +2096,12 @@ def render_tab1(cfg: dict[str, Any], data: pd.DataFrame, data_err: Optional[str]
         m.columns = [f"{c:02d}" for c in m.columns]
         fig_hm = go.Figure(go.Heatmap(
             z=m.values, x=list(m.columns), y=[str(i) for i in m.index],
-            colorscale=[[0, "#FF4B4B"], [0.5, "#111827"], [1, "#00D26A"]],
+            colorscale=[[0, "#f6465d"], [0.5, "#181a20"], [1, "#0ecb81"]],
             zmid=0, texttemplate="%{z:,.0f}", textfont={"size": 9},
         ))
         fig_hm.update_layout(template="plotly_dark", height=60 * len(m) + 120,
                              margin=dict(t=20, b=20),
-                             xaxis_title="เดือน", yaxis_title="ปี")
+                             xaxis_title="เดือน", yaxis_title="ปี", paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)')
         st.plotly_chart(fig_hm, **WIDE)
 
     with st.expander("🔍 Daily Ledger (100 วันล่าสุด)"):
@@ -2466,21 +2409,39 @@ def render_tab2(cfg: dict[str, Any], data: pd.DataFrame, data_err: Optional[str]
 
 # ---- 5.4 TAB 3 — TIME-TRAVEL ORDER SIMULATOR ---------------------------
 
+def generate_orderbook_html(price: float, spread: float) -> str:
+    html = '<div style="background:#181a20; border:1px solid #2b3139; border-radius:8px; padding:12px; height:100%;">'
+    html += '<div style="color:#EAECEF; font-size:1rem; font-weight:600; margin-bottom:12px;">สมุดออเดอร์</div>'
+    html += '<div class="ob-header"><span>ราคา (THB)</span><span>จำนวน</span><span>รวม</span></div>'
+    
+    # Asks (Red)
+    for i in range(7, 0, -1):
+        p = price * (1 + spread + (i * 0.001))
+        v = np.random.uniform(0.01, 1.5)
+        t = p * v
+        depth = np.random.uniform(10, 80)
+        html += f'<div class="ob-row" style="background: linear-gradient(to left, rgba(246,70,93,0.15) {depth}%, transparent {depth}%);"><span class="ex-red">{p:,.2f}</span><span>{v:,.4f}</span><span>{t:,.0f}</span></div>'
+    
+    # Mid Price
+    html += f'<div class="ob-mid"><span class="ex-green">{price:,.2f}</span> <span style="color:#848e9c; font-size:0.8rem; font-weight:normal;">THB</span></div>'
+    
+    # Bids (Green)
+    for i in range(1, 8):
+        p = price * (1 - spread - (i * 0.001))
+        v = np.random.uniform(0.01, 1.5)
+        t = p * v
+        depth = np.random.uniform(10, 80)
+        html += f'<div class="ob-row" style="background: linear-gradient(to left, rgba(14,203,129,0.15) {depth}%, transparent {depth}%);"><span class="ex-green">{p:,.2f}</span><span>{v:,.4f}</span><span>{t:,.0f}</span></div>'
+    
+    html += '</div>'
+    return html
+
 @_fragment
 def render_tab3(cfg: dict[str, Any], data: pd.DataFrame, data_err: Optional[str],
                 price_lookup: Optional[dict[str, float]] = None) -> None:
-    st.markdown(
-        "### 🛒 Time-Travel Order Journey\n"
-        "จำลองสถานการณ์จริง: **\"เมื่อลูกค้าส่งคำสั่งซื้อ/ขาย "
-        "ระบบหลังบ้านต้องวิ่งผ่านด่านอะไรบ้าง?\"**\n\n"
-        "ทดลองใส่ออเดอร์ด้านซ้าย หรือรันอัตโนมัติ ระบบจะ**สุ่มเดินหน้าวันเวลา"
-        "ไปเรื่อยๆ ตามกรอบเวลาที่เลือก** เพื่อทดสอบว่าถ้ารับลูกค้าต่อเนื่อง"
-        "จนโควตาต่างๆ ถูกใช้ไป ด่านไหนจะแตกก่อนกัน"
-    )
 
     if data.empty:
-        st.error(f"⚠️ ต้องโหลดราคาจริงก่อนถึงจะจำลองได้: "
-                 f"{data_err or 'ไม่สามารถโหลดข้อมูลได้'}")
+        st.error(f"⚠️ ต้องโหลดราคาจริงก่อนถึงจะจำลองได้: {data_err or 'ไม่สามารถโหลดข้อมูลได้'}")
         return
 
     asset = cfg["asset"]
@@ -2488,74 +2449,40 @@ def render_tab3(cfg: dict[str, Any], data: pd.DataFrame, data_err: Optional[str]
 
     rp_sim = risk_profile(data["Global_USD"])
     if rp_sim is None:
-        st.error(f"ข้อมูลย้อนหลังน้อยกว่า {MIN_RISK_SAMPLE_DAYS} วัน — "
-                 "เลือกช่วงเวลายาวขึ้นในแถบซ้าย "
-                 "(ต้องใช้คำนวณ Expected Shortfall สำหรับ haircut)")
+        st.error(f"ข้อมูลย้อนหลังน้อยกว่า {MIN_RISK_SAMPLE_DAYS} วัน — กรุณาเลือกช่วงเวลาให้ยาวขึ้น")
         return
-    if rp_sim.get("insufficient_sample"):
-        st.info(
-            f"ℹ️ กำลังใช้ข้อมูล {rp_sim['n_obs']} วันคำนวณ haircut ของซิมูเลเตอร์นี้ — "
-            f"ต่ำกว่า {RISK_SAMPLE_WARN_DAYS} วัน ตัวเลขในหน้านี้จึงเป็นเพียง"
-            "ตัวอย่างสาธิต ไม่ควรใช้ตัดสินใจทุนจริง"
-        )
 
     h_crypto_sim = crypto_haircut(rp_sim["es99"], settlement_days)
-    if cfg["cex_margin_asset"].startswith("Stablecoin"):
-        h_cex_sim = cfg["cex_counterparty_haircut"]
-    else:
-        h_cex_sim = h_crypto_sim
+    h_cex_sim = cfg["cex_counterparty_haircut"] if cfg["cex_margin_asset"].startswith("Stablecoin") else h_crypto_sim
 
-    a_factor_sim = safety_stock_factor(cfg["net_bias_pct"], cfg["flow_cv_pct"],
-                                       settlement_days, cfg["z_alpha"])
+    a_factor_sim = safety_stock_factor(cfg["net_bias_pct"], cfg["flow_cv_pct"], settlement_days, cfg["z_alpha"])
     target_stock_thb = a_factor_sim * cfg["monthly_volume_thb"]
     cex_liquidity_thb = max(0.0, float(cfg["cex_margin_thb"]))
 
     ctx = dict(
-        asset=asset,
-        local_premium=cfg["local_premium"],
-        spread=cfg["dealer_spread"],
-        hedge_fee=cfg["hedge_fee"],
-        fx_limit=cfg["fx_limit_max"],
-        slip_sens=cfg["slippage_sensitivity"],
-        market_depth_usd=cfg["market_depth_usd"],
-        impact_penalty=cfg["impact_penalty"],
-        include_fee_rev=cfg["include_trading_fee_revenue"],
-        wd_markup=cfg["withdrawal_fee_markup_pct"],
-        wd_fee_per_coin=WITHDRAWAL_FEE_TABLE.get(asset, 0.0),
-        bank_type=cfg["bank_type"],
-        ktb_wd_fee=cfg["ktb_wd_fee_thb"],
-        ktb_fx_bps=cfg["ktb_fx_spread_bps"],
-        capital=cfg["total_capital_thb"],
-        cex_margin=cfg["cex_margin_thb"],
-        cex_liquidity_thb=cex_liquidity_thb,
-        liab=cfg["liab_thb"],
-        h_crypto=h_crypto_sim,
-        h_cex=h_cex_sim,
-        fixed_min_nc=cfg["fixed_min_nc"],
-        trading_risk_rate=cfg["trading_risk_rate"],
-        daily_volume_thb=cfg["daily_volume_thb"],
-        custody_rate=cfg["custody_rate_blended"],
-        hot_breach=cfg["hot_wallet_cap_breach"],
+        asset=asset, local_premium=cfg["local_premium"], spread=cfg["dealer_spread"],
+        hedge_fee=cfg["hedge_fee"], fx_limit=cfg["fx_limit_max"], slip_sens=cfg["slippage_sensitivity"],
+        market_depth_usd=cfg["market_depth_usd"], impact_penalty=cfg["impact_penalty"],
+        include_fee_rev=cfg["include_trading_fee_revenue"], wd_markup=cfg["withdrawal_fee_markup_pct"],
+        wd_fee_per_coin=WITHDRAWAL_FEE_TABLE.get(asset, 0.0), bank_type=cfg["bank_type"],
+        ktb_wd_fee=cfg["ktb_wd_fee_thb"], ktb_fx_bps=cfg["ktb_fx_spread_bps"],
+        capital=cfg["total_capital_thb"], cex_margin=cfg["cex_margin_thb"],
+        cex_liquidity_thb=cex_liquidity_thb, liab=cfg["liab_thb"],
+        h_crypto=h_crypto_sim, h_cex=h_cex_sim, fixed_min_nc=cfg["fixed_min_nc"],
+        trading_risk_rate=cfg["trading_risk_rate"], daily_volume_thb=cfg["daily_volume_thb"],
+        custody_rate=cfg["custody_rate_blended"], hot_breach=cfg["hot_wallet_cap_breach"],
     )
 
-    signature = sim_config_signature(ctx, target_stock_thb,
-                                     cfg["start_date"], cfg["end_date"])
-    need_reset = (("sim" not in st.session_state)
-                  or st.session_state.get("sim_signature") != signature)
+    signature = sim_config_signature(ctx, target_stock_thb, cfg["start_date"], cfg["end_date"])
+    need_reset = (("sim" not in st.session_state) or st.session_state.get("sim_signature") != signature)
 
     if need_reset:
         first_day = pd.to_datetime(data.index[0])
-        st.session_state.sim = sim_defaults(
-            asset, first_day,
-            data.loc[first_day, "Global_USD"],
-            data.loc[first_day, "USDTHB"],
-            target_stock_thb,
-        )
+        st.session_state.sim = sim_defaults(asset, first_day, data.loc[first_day, "Global_USD"], data.loc[first_day, "USDTHB"], target_stock_thb)
         st.session_state.sim_signature = signature
         st.session_state.sim_steps = []
 
-    current_date_val = pd.to_datetime(
-        st.session_state.sim.get("current_date", data.index[0]))
+    current_date_val = pd.to_datetime(st.session_state.sim.get("current_date", data.index[0]))
     if current_date_val not in data.index:
         current_date_val = pd.to_datetime(data.index[0])
         st.session_state.sim["current_date"] = current_date_val
@@ -2563,237 +2490,170 @@ def render_tab3(cfg: dict[str, Any], data: pd.DataFrame, data_err: Optional[str]
     spot_usd_current = float(data.loc[current_date_val, "Global_USD"])
     usdthb_current = float(data.loc[current_date_val, "USDTHB"])
 
-    sim = sim_normalize_state(st.session_state.sim, asset, current_date_val,
-                              spot_usd_current, usdthb_current, target_stock_thb)
+    sim = sim_normalize_state(st.session_state.sim, asset, current_date_val, spot_usd_current, usdthb_current, target_stock_thb)
     st.session_state.sim = sim
 
-    coin_price_thb_now = spot_usd_current * usdthb_current
-    stock_thb_now = max(0.0, sim["inv_coins"].get(asset, 0.0)) * coin_price_thb_now
-    nc_now = nc_snapshot(
-        stock_thb_now, cfg["total_capital_thb"], cfg["cex_margin_thb"],
-        cfg["liab_thb"], h_crypto_sim, h_cex_sim, cfg["fixed_min_nc"],
-        cfg["trading_risk_rate"], cfg["daily_volume_thb"],
-        cfg["custody_rate_blended"],
-    )
+    mid_now = spot_usd_current * usdthb_current * (1 + cfg["local_premium"])
+    vol_24h_thb = cfg["daily_volume_thb"]
+    high_24h = mid_now * 1.025
+    low_24h = mid_now * 0.982
 
-    section(f"📟 สถานะระบบ ณ วันที่จำลอง: {current_date_val.strftime('%Y-%m-%d')}")
-    s1 = st.columns(4)
-    if target_stock_thb > 0:
-        stock_ratio = stock_thb_now / target_stock_thb * 100
-    else:
-        stock_ratio = 0
-    metric_card(
-        s1[0], f"สต็อก {asset} คงเหลือ", fmt_coin(sim["inv_coins"].get(asset, 0.0), asset),
-        sim["inv_coins"].get(asset, 0.0),
-        f"{fmt_baht(stock_thb_now)} · {stock_ratio:.0f}% "
-        f"ของเป้า {fmt_baht(target_stock_thb)}",
-    )
-    fx_limit_max = cfg["fx_limit_max"]
-    fx_left = max(0.0, fx_limit_max - sim["fx_used_usd"])
-    metric_card(
-        s1[1], "โควตา Outbound FX ที่ใช้", f"$ {sim['fx_used_usd']:,.0f}", fx_left,
-        f"เหลือ $ {fx_left:,.0f} จาก $ {fx_limit_max:,.0f}",
-    )
-    cex_left = max(0.0, cex_liquidity_thb - sim["cex_used_thb"])
-    metric_card(
-        s1[2], "CEX Liquidity ที่ใช้", fmt_baht(sim["cex_used_thb"]), cex_left,
-        f"เหลือ {fmt_baht(cex_left)} จาก {fmt_baht(cex_liquidity_thb)}",
-    )
-    if sim["orders"]:
-        avg_txt = (f"{len(sim['orders'])} ออเดอร์ · เฉลี่ย "
-                   f"{fmt_baht(sim['pnl_thb'] / len(sim['orders']), True)}/ออเดอร์")
-    else:
-        avg_txt = "ยังไม่มีออเดอร์"
-    metric_card(s1[3], "กำไรสะสมของ Dealer", fmt_baht(sim["pnl_thb"], True),
-                sim["pnl_thb"], avg_txt)
+    # --- TOP HEADER BAR ---
+    top_bar_html = f"""
+    <div class="ex-header">
+        <div style="display:flex; align-items:center; gap:12px;">
+            <img src="https://cryptologos.cc/logos/{asset.lower()}-{asset.lower()}-logo.png" onerror="this.src='https://cdn-icons-png.flaticon.com/512/1490/1490844.png'" style="width:40px; height:40px; border-radius:50%; background:white; padding:2px;">
+            <div class="ex-stat">
+                <span style="font-size:1.4rem; font-weight:700; color:#EAECEF;">{asset}/THB</span>
+                <span style="font-size:0.8rem; font-weight:600;" class="ex-green">เปลี่ยน 24H +1.26%</span>
+            </div>
+        </div>
+        <div class="ex-stat"><span class="ex-stat-label">ราคาล่าสุด (THB)</span><span class="ex-stat-val ex-green">{mid_now:,.2f}</span></div>
+        <div class="ex-stat"><span class="ex-stat-label">สูงสุด 24H (THB)</span><span class="ex-stat-val">{high_24h:,.2f}</span></div>
+        <div class="ex-stat"><span class="ex-stat-label">ต่ำสุด 24H (THB)</span><span class="ex-stat-val">{low_24h:,.2f}</span></div>
+        <div class="ex-stat"><span class="ex-stat-label">ปริมาณ 24H (THB)</span><span class="ex-stat-val">{vol_24h_thb/1e6:,.2f}M</span></div>
+        <div class="ex-stat"><span class="ex-stat-label">Time-Travel Date</span><span class="ex-stat-val" style="color:#fcd535;">{current_date_val.strftime('%Y-%m-%d')}</span></div>
+    </div>
+    """
+    st.markdown(top_bar_html, unsafe_allow_html=True)
 
-    g_cols = st.columns(3)
-    with g_cols[0]:
-        if fx_limit_max > 0:
-            fx_text = f"{sim['fx_used_usd'] / fx_limit_max * 100:.0f}%"
-        else:
-            fx_text = "N/A"
-        gauge_bar("โควตา Outbound FX", sim["fx_used_usd"], fx_limit_max,
-                  value_text=fx_text,
-                  sub=f"ใช้ $ {sim['fx_used_usd']:,.0f} / $ {fx_limit_max:,.0f}")
-    with g_cols[1]:
-        if cex_liquidity_thb > 0:
-            cex_text = f"{sim['cex_used_thb'] / cex_liquidity_thb * 100:.0f}%"
-        else:
-            cex_text = "N/A"
-        gauge_bar("CEX Liquidity", sim["cex_used_thb"], cex_liquidity_thb,
-                  value_text=cex_text,
-                  sub=(f"ใช้ {fmt_baht(sim['cex_used_thb'])} / "
-                       f"{fmt_baht(cex_liquidity_thb)}"))
-    with g_cols[2]:
-        if nc_now["actual"] > 0:
-            nc_use = nc_now["required"] / nc_now["actual"]
-        else:
-            nc_use = 9.99
-        nc_text = f"{nc_use * 100:.0f}%" if nc_use < 9 else "เกิน 100%"
-        gauge_bar("NC Utilization (NC ขั้นต่ำ ÷ NC จริง)", nc_now["required"],
-                  max(nc_now["actual"], 0.0), value_text=nc_text,
-                  sub=f"Buffer {fmt_baht(nc_now['buffer'], True)}",
-                  warn_at=2 / 3, crit_at=1.0)
+    # --- MAIN LAYOUT ---
+    col_left, col_center, col_right = st.columns([1.8, 5, 2.8], gap="small")
 
-    if sim["unhedged_thb"] > 0:
-        verdict_box(
-            False,
-            f"มี Unhedged Exposure สะสม {fmt_baht(sim['unhedged_thb'])}",
-            "เกิดจาก Buy-side FX quota หรือ Sell-side CEX liquidity ไม่พอ "
-            "จึงยังมี inventory exposure ที่ยังไม่ได้ปิด",
-        )
-    if nc_now["buffer"] < 0:
-        verdict_box(
-            False, "NC Buffer ติดลบใน Planning Model",
-            "หลังสถานะปัจจุบัน NC ต่ำกว่า NC ขั้นต่ำที่คำนวณไว้ "
-            "ไม่ได้หมายความว่าเป็นการรับรอง/วินิจฉัย compliance อัตโนมัติ",
-        )
-
-    left, right = st.columns([1, 2], gap="large")
-
-    with left:
-        section("🧑‍💻 หน้าจอลูกค้า")
-
-        coins_book = sim.get("customer_coins", {})
-        mid_now = coin_price_thb_now * (1 + cfg["local_premium"])
-
-        wallet_price = dict(price_lookup or {})
-        wallet_price[asset] = spot_usd_current
-
-        port_val_thb = sum(q * wallet_price.get(sym, 0.0) * usdthb_current for sym, q in coins_book.items())
-        port_val_usdt = port_val_thb / usdthb_current if usdthb_current else 0
-
-        update_time = pd.Timestamp.now().strftime("%H:%M:%S")
-
+    # --- LEFT COLUMN: Market List ---
+    with col_left:
+        st.markdown('<div class="ex-panel" style="padding:12px;">', unsafe_allow_html=True)
+        st.text_input("🔍 ค้นหาสินทรัพย์", placeholder="ค้นหา...", label_visibility="collapsed")
+        st.markdown('<div style="display:flex; gap:16px; margin: 12px 0 8px 0; font-size:0.85rem; font-weight:600; color:#848e9c; border-bottom:1px solid #2b3139; padding-bottom:8px;"><span style="color:#EAECEF; border-bottom:2px solid #0ecb81; padding-bottom:6px; margin-bottom:-8px;">ทั้งหมด</span><span>รายการโปรด</span></div>', unsafe_allow_html=True)
+        
+        market_html = '<div style="height: 600px; overflow-y: auto; padding-right: 4px;">'
+        market_html += '<div style="display:flex; justify-content:space-between; font-size:0.75rem; color:#848e9c; margin-bottom:8px;"><span>สินทรัพย์</span><span>ราคาล่าสุด</span></div>'
+        
         coin_info = {
-            "BTC": {"name": "Bitcoin", "logo": "https://cryptologos.cc/logos/bitcoin-btc-logo.png"},
-            "ETH": {"name": "Ethereum", "logo": "https://cryptologos.cc/logos/ethereum-eth-logo.png"},
-            "USDT": {"name": "Tether", "logo": "https://cryptologos.cc/logos/tether-usdt-logo.png"},
-            "SOL": {"name": "Solana", "logo": "https://cryptologos.cc/logos/solana-sol-logo.png"},
-            "DOGE": {"name": "Dogecoin", "logo": "https://cryptologos.cc/logos/dogecoin-doge-logo.png"},
-            "ADA": {"name": "Cardano", "logo": "https://cryptologos.cc/logos/cardano-ada-logo.png"},
-            "HBAR": {"name": "Hedera", "logo": "https://cryptologos.cc/logos/hedera-hbar-logo.png"},
-            "LINK": {"name": "Chainlink", "logo": "https://cryptologos.cc/logos/chainlink-link-logo.png"},
-            "XLM": {"name": "Stellar", "logo": "https://cryptologos.cc/logos/stellar-xlm-logo.png"},
-            "XRP": {"name": "XRP", "logo": "https://cryptologos.cc/logos/xrp-xrp-logo.png"},
-            "USDC": {"name": "USD Coin", "logo": "https://cryptologos.cc/logos/usd-coin-usdc-logo.png"},
-            "SIRIHUB2": {"name": "SiriHub2", "logo": "https://cdn-icons-png.flaticon.com/512/1490/1490844.png"},
-            "THB": {"name": "Thai Baht", "logo": "https://cdn-icons-png.flaticon.com/512/197/197583.png"},
+            "BTC": "Bitcoin", "ETH": "Ethereum", "USDT": "Tether", "SOL": "Solana",
+            "DOGE": "Dogecoin", "ADA": "Cardano", "HBAR": "Hedera", "LINK": "Chainlink",
+            "XLM": "Stellar", "XRP": "XRP", "USDC": "USD Coin", "PEPE": "Pepe"
         }
-        default_logo = "https://cdn-icons-png.flaticon.com/512/1490/1490844.png"
-
-        coin_rows = []
-        for sym, qty in sorted(coins_book.items(), key=lambda kv: -kv[1] * wallet_price.get(kv[0], 0.0)):
-            if qty <= 0: continue
-            val_thb = qty * wallet_price.get(sym, 0.0) * usdthb_current
-            c_info = coin_info.get(sym, {"name": sym, "logo": default_logo})
-            row_html = (
-                '<div style="display:flex;justify-content:space-between;align-items:center;padding:16px 0;border-bottom:1px solid #282f3b;">'
-                '<div style="display:flex;align-items:center;gap:16px;">'
-                f'<img src="{c_info["logo"]}" style="width:34px;height:34px;border-radius:50%;object-fit:contain;background:white;padding:2px;">'
-                '<div>'
-                f'<div style="color:#FAFAFA;font-weight:bold;font-size:1.05rem;line-height:1.2;">{sym}</div>'
-                f'<div style="color:#9CA3AF;font-size:0.8rem;margin-top:2px;">{c_info["name"]}</div>'
-                '</div></div>'
-                '<div style="text-align:right;">'
-                f'<div style="color:#FAFAFA;font-weight:bold;font-size:1.05rem;line-height:1.2;">{fmt_coin(qty, "").strip()} <span style="color:#6B7280;font-size:0.9rem;">&gt;</span></div>'
-                f'<div style="color:#9CA3AF;font-size:0.8rem;margin-top:2px;">{fmt_num(val_thb)} THB</div>'
-                '</div></div>'
-            )
-            coin_rows.append(row_html)
-
-        if not coin_rows:
-            coin_rows.append('<div style="padding:24px 0;color:#6B7280;text-align:center;font-size:0.9rem;">ยังไม่มีสินทรัพย์ในพอร์ต</div>')
-
-        coin_rows_html = "".join(coin_rows)
-
-        html_ui = (
-            '<div style="background:#161b22;border-radius:12px;overflow:hidden;margin-bottom:20px;border:1px solid #30363d;font-family:sans-serif;">'
-            '<div style="background:#1e3a29;padding:14px 20px;border-bottom:1px solid #30363d;">'
-            '<div style="display:flex;justify-content:space-between;align-items:center;color:#e6edf3;">'
-            '<span style="font-size:1.1rem;font-weight:bold;">กระเป๋าเงิน (Simulated)</span>'
-            '<span style="font-size:1.1rem;color:#8b949e;">ⓘ 🕒</span>'
-            '</div></div>'
-            '<div style="padding:28px 20px;text-align:center;border-bottom:1px solid #30363d;background:#1a2027;">'
-            '<div style="color:#8b949e;font-size:0.85rem;margin-bottom:10px;">มูลค่าทั้งหมด</div>'
-            f'<div style="color:#2ea043;font-size:2.4rem;font-weight:800;line-height:1;">{fmt_num(port_val_thb)} THB</div>'
-            f'<div style="color:#8b949e;font-size:0.85rem;margin-top:10px;">(≈ {fmt_num(port_val_usdt)} USDT)</div>'
-            f'<div style="color:#6e7681;font-size:0.75rem;margin-top:20px;">↻ อัปเดตล่าสุด: {update_time}</div>'
-            '</div>'
-            '<div style="padding:0 20px 10px 20px;background:#161b22;">'
-            '<div style="display:flex;justify-content:space-between;align-items:center;padding:16px 0;border-bottom:1px solid #282f3b;">'
-            '<div style="display:flex;align-items:center;gap:16px;">'
-            f'<img src="{coin_info["THB"]["logo"]}" style="width:34px;height:34px;border-radius:50%;object-fit:cover;border:1px solid #30363d;">'
-            '<div><div style="color:#FAFAFA;font-weight:bold;font-size:1.05rem;line-height:1.2;">THB</div>'
-            '<div style="color:#9CA3AF;font-size:0.8rem;margin-top:2px;">Thai Baht</div></div></div>'
-            '<div style="text-align:right;">'
-            '<div style="color:#FAFAFA;font-weight:bold;font-size:1.05rem;line-height:1.2;">0.00 <span style="color:#6B7280;font-size:0.9rem;">&gt;</span></div>'
-            '<div style="color:#9CA3AF;font-size:0.8rem;margin-top:2px;">0 THB</div>'
-            '</div></div>'
-            + coin_rows_html +
-            '</div></div>'
-        )
-
-        st.markdown(html_ui, unsafe_allow_html=True)
-
-        with st.container(border=True):
-            order_side = st.radio("ฝั่ง", ["ซื้อ", "ขาย"], horizontal=True,
-                                  key="sim_side")
-            side_key = "buy" if order_side == "ซื้อ" else "sell"
-            order_amt = comma_number_input(
-                "มูลค่า (บาท)", value=500_000, min_value=0, key="sim_amount",
-                help=("Gross order notional ที่ลูกค้าระบุ; ค่าธรรมเนียม 0.25% "
-                      "ถูกหักแยกในขั้น settlement"),
-            )
+        
+        for sym in SUPPORTED_ASSETS:
+            c_name = coin_info.get(sym, sym)
+            p_usd = price_lookup.get(sym, spot_usd_current if sym == asset else np.random.uniform(0.1, 100))
+            p_thb = p_usd * usdthb_current
+            change = np.random.uniform(-5, 5)
+            c_class = "ex-green" if change >= 0 else "ex-red"
+            sign = "+" if change >= 0 else ""
+            logo = f"https://cryptologos.cc/logos/{sym.lower()}-{sym.lower()}-logo.png"
             
-            if side_key == "buy":
-                quote_now = mid_now * (1 + cfg["dealer_spread"])
+            bg_style = "background-color: #2b3139; border-radius:4px; padding: 4px;" if sym == asset else "padding: 4px;"
+            
+            market_html += f"""
+            <div class="mk-row" style="{bg_style}">
+                <div class="mk-coin">
+                    <img src="{logo}" onerror="this.src='https://cdn-icons-png.flaticon.com/512/1490/1490844.png'" style="width:20px; height:20px; border-radius:50%; background:white;">
+                    <div style="line-height:1.2;"><div>{sym}</div><div style="font-size:0.7rem; color:#848e9c; font-weight:normal;">{c_name}</div></div>
+                </div>
+                <div>
+                    <div class="mk-price">{p_thb:,.2f}</div>
+                    <div class="mk-vol {c_class}">{sign}{change:.2f}%</div>
+                </div>
+            </div>"""
+        market_html += '</div></div>'
+        st.markdown(market_html, unsafe_allow_html=True)
+
+    # --- CENTER COLUMN: Chart & Timeline ---
+    with col_center:
+        st.markdown('<div class="ex-panel" style="padding:0; overflow:hidden; border:none; background:transparent;">', unsafe_allow_html=True)
+        local_sym = TV_LOCAL_SYMBOL.get(asset, f"BITKUB:{asset}THB")
+        render_tradingview(local_sym, "tv_center", 480, studies=["MAExp@tv-basicstudies"])
+        st.markdown('</div>', unsafe_allow_html=True)
+
+        st.markdown('<div style="margin-top:16px;"></div>', unsafe_allow_html=True)
+        t_route, t_ledger, t_wallet = st.tabs(["🚀 System Routing (ออเดอร์ล่าสุด)", "📒 สมุดออเดอร์ (Ledger)", "💼 Wallet & Capital"])
+        
+        with t_route:
+            steps_now = st.session_state.get("sim_steps", [])
+            if not steps_now:
+                st.info("ยังไม่มีออเดอร์ — กดสั่งซื้อ/ขาย ด้านขวามือเพื่อดูระบบเดินงานทีละด่าน")
             else:
-                quote_now = mid_now * (1 - cfg["dealer_spread"])
+                render_timeline(steps_now)
+                
+        with t_ledger:
+            if not sim["orders"]:
+                st.caption("ยังไม่มีข้อมูลการเทรด")
+            else:
+                led = pd.DataFrame(sim["orders"])
+                led.index = range(1, len(led) + 1)
+                st.dataframe(led.sort_index(ascending=False), height=250, use_container_width=True)
 
-            sign_txt = "+" if side_key == "buy" else "−"
-            st.caption(
-                f"ราคา ณ วันที่ {current_date_val.strftime('%Y-%m-%d')}: "
-                f"**฿ {quote_now:,.2f}** / {asset}\n\n"
-                f"<small>(ราคาโลก $ {spot_usd_current:,.2f} × "
-                f"{usdthb_current:,.2f} + premium "
-                f"{cfg['local_premium'] * 100:.2f}% {sign_txt} spread "
-                f"{cfg['dealer_spread'] * 100:.2f}%)</small>",
-                unsafe_allow_html=True,
-            )
+        with t_wallet:
+            stock_thb_now = max(0.0, sim["inv_coins"].get(asset, 0.0)) * spot_usd_current * usdthb_current
+            fx_left = max(0.0, cfg["fx_limit_max"] - sim["fx_used_usd"])
+            
+            c1, c2, c3 = st.columns(3)
+            with c1:
+                st.metric("สต็อกคงเหลือ (THB)", fmt_baht(stock_thb_now))
+                st.metric("เหรียญคงเหลือ", fmt_coin(sim["inv_coins"].get(asset, 0.0), asset))
+            with c2:
+                st.metric("Outbound FX ใช้ไป ($)", f"{sim['fx_used_usd']:,.0f}")
+                st.metric("FX โควตาคงเหลือ ($)", f"{fx_left:,.0f}")
+            with c3:
+                st.metric("กำไรสะสม Dealer (THB)", fmt_baht(sim["pnl_thb"], True))
+                st.metric("ออเดอร์ทั้งหมด", f"{len(sim['orders'])} รายการ")
+
+    # --- RIGHT COLUMN: Orderbook & Order Entry ---
+    with col_right:
+        st.markdown(generate_orderbook_html(mid_now, cfg["dealer_spread"]), unsafe_allow_html=True)
+        
+        st.markdown('<div style="margin-top:16px;"></div>', unsafe_allow_html=True)
+        
+        with st.container(border=True):
+            st.markdown("""
+            <div class="oe-tabs">
+                <span class="oe-tab">ลิมิต</span>
+                <span class="oe-tab active">มาร์เก็ต</span>
+                <span class="oe-tab">สต็อปลิมิต</span>
+            </div>
+            """, unsafe_allow_html=True)
+
+            cash_balance = nc_snapshot(0, cfg["total_capital_thb"], cfg["cex_margin_thb"], cfg["liab_thb"], 0, 0, 0, 0, 0, 0)["cash"]
+            coin_balance = sim["customer_coins"].get(asset, 0.0)
+
+            st.markdown(f"""
+            <div class="oe-bal">
+                <span>คงเหลือ: <b style="color:#EAECEF;">{cash_balance:,.0f} THB</b></span>
+                <span><b style="color:#EAECEF;">{coin_balance:,.6f} {asset}</b></span>
+            </div>
+            """, unsafe_allow_html=True)
+
+            order_side = st.radio("ฝั่ง", ["ซื้อ", "ขาย"], horizontal=True, label_visibility="collapsed", key="sim_side")
+            side_key = "buy" if order_side == "ซื้อ" else "sell"
+            
+            order_amt = comma_number_input("จำนวนที่ต้องการจ่าย (THB)", value=500000, min_value=0, key="sim_amount")
+            
+            quote_now = mid_now * (1 + cfg["dealer_spread"]) if side_key == "buy" else mid_now * (1 - cfg["dealer_spread"])
             est_coins = order_amt * (1 - LOCAL_TRADING_FEE_PCT) / quote_now
-            st.caption(f"ประมาณ {fmt_coin(est_coins, asset)} หลังหักค่าธรรมเนียม "
-                       f"{LOCAL_TRADING_FEE_PCT * 100:.2f}%")
-            send = st.button("📤 ส่งคำสั่ง (แมนนวล)", type="primary", **WIDE)
 
-        with st.expander("🤖 เครื่องมือสุ่มออเดอร์อัตโนมัติ", expanded=False):
-            st.caption("สุ่มออเดอร์กระจายในกรอบเวลา "
-                       "เพื่อดูว่าอะไรตึงก่อนเมื่อมีออเดอร์หลายรายการ")
-            n_orders = st.number_input("จำนวนออเดอร์ที่จะสุ่ม", value=20,
-                                       min_value=1, max_value=500, step=10,
-                                       key="sim_n")
-            seed = st.number_input("Random seed", value=42, step=1, key="sim_seed")
-            run_batch = st.button("🎲 รันชุดออเดอร์ (Batch)", **WIDE)
+            st.markdown(f'<div style="color:#848e9c; font-size:0.8rem; margin: 8px 0 16px 0; background:#181a20; padding:10px; border-radius:4px; border:1px solid #2b3139;">ราคาประเมิน: <b style="color:#EAECEF;">{quote_now:,.2f} THB</b><br>จะได้รับ: <b style="color:#EAECEF;">≈ {est_coins:,.6f} {asset}</b></div>', unsafe_allow_html=True)
 
-        reset = st.button("♻️ เริ่มต้นระบบใหม่ (ล้างสถานะ)", **WIDE)
+            btn_label = f"ซื้อ (Buy) {asset}" if side_key == "buy" else f"ขาย (Sell) {asset}"
+            send = st.button(btn_label, type="secondary", use_container_width=True)
+            
+            st.divider()
+            
+            n_orders = st.number_input("จำนวนออเดอร์สุ่ม", value=20, min_value=1, step=10, key="sim_n")
+            seed = st.number_input("Random seed", value=42, step=1, key="sim_seed", label_visibility="collapsed")
+            run_batch = st.button("🎲 สุ่มออเดอร์ (Auto-Run)", type="secondary", use_container_width=True)
+            reset = st.button("♻️ ล้างระบบใหม่", use_container_width=True)
 
         if reset:
             first_day = pd.to_datetime(data.index[0])
-            st.session_state.sim = sim_defaults(
-                asset, first_day,
-                data.loc[first_day, "Global_USD"],
-                data.loc[first_day, "USDTHB"],
-                target_stock_thb,
-            )
+            st.session_state.sim = sim_defaults(asset, first_day, data.loc[first_day, "Global_USD"], data.loc[first_day, "USDTHB"], target_stock_thb)
             st.session_state.sim_signature = signature
             st.session_state.sim_steps = []
             _rerun_fragment()
 
         if send:
-            steps, _rec = execute_order(sim, side_key, float(order_amt),
-                                        current_date_val,
-                                        data.loc[current_date_val], ctx)
+            steps, _rec = execute_order(sim, side_key, float(order_amt), current_date_val, data.loc[current_date_val], ctx)
             st.session_state.sim_steps = steps
             valid_dates = data[data.index >= current_date_val].index
             if len(valid_dates) > 1:
@@ -2820,159 +2680,11 @@ def render_tab3(cfg: dict[str, Any], data: pd.DataFrame, data_err: Optional[str]
             for d in chosen_dates:
                 amt = float(rng.lognormal(mu, sigma))
                 s_ = "buy" if rng.random() < p_buy else "sell"
-                last_steps, _rec = execute_order(
-                    sim, s_, max(amt, MIN_TRADE_THB), d, data.loc[d], ctx)
+                last_steps, _rec = execute_order(sim, s_, max(amt, MIN_TRADE_THB), d, data.loc[d], ctx)
 
             sim["current_date"] = pd.to_datetime(chosen_dates[-1])
             st.session_state.sim_steps = last_steps
             _rerun_fragment()
-
-    with right:
-        section("🔎 เส้นทางหลังบ้านของออเดอร์ล่าสุด")
-        steps_now = st.session_state.get("sim_steps", [])
-        if not steps_now:
-            st.info("ยังไม่มีออเดอร์ — กด **ส่งคำสั่ง** ทางซ้าย"
-                    "เพื่อดูระบบเดินงานทีละด่าน")
-        else:
-            render_timeline(steps_now)
-
-    if sim["orders"]:
-        section("📒 สมุดออเดอร์")
-        led = pd.DataFrame(sim["orders"])
-        led.index = range(1, len(led) + 1)
-        led.index.name = "#"
-
-        lc = st.columns(4)
-        buys = int((led["ฝั่ง"] == "ซื้อ").sum())
-        blocked = int((led["ผลด่าน"] != "ผ่าน").sum())
-        led_notional = led["มูลค่า (บาท)"].sum()
-        if led_notional:
-            led_margin_bps = led["กำไรออเดอร์"].sum() / led_notional * 10000
-        else:
-            led_margin_bps = 0.0
-
-        metric_card(lc[0], "จำนวนออเดอร์", f"{len(led):,}", None,
-                    f"ซื้อ {buys} · ขาย {len(led) - buys}")
-        metric_card(lc[1], "Notional รวม", fmt_baht(led_notional), None,
-                    "มูลค่าธุรกรรมรวม (ไม่ใช่กำไร)")
-        metric_card(lc[2], "มาร์จิ้นเฉลี่ย", f"{led_margin_bps:,.1f} bps",
-                    led["กำไรออเดอร์"].sum(), "P&L รวม ÷ Notional รวม")
-        metric_card(lc[3], "ออเดอร์ที่ต้องเฝ้าระวัง/ติดด่าน", f"{blocked:,}",
-                    -1 if blocked else 0,
-                    f"{blocked / len(led) * 100:.1f}% ของทั้งหมด")
-
-        g1, g2 = st.columns(2)
-        with g1:
-            fig_pnl = go.Figure()
-            fig_pnl.add_trace(go.Scatter(
-                y=led["กำไรออเดอร์"].cumsum(), x=led.index, name="กำไรสะสม",
-                line=dict(color="#00D26A", width=2), fill="tozeroy",
-                fillcolor="rgba(0,210,106,.12)",
-            ))
-            fig_pnl.update_layout(
-                template="plotly_dark", height=320, margin=dict(t=40, b=20),
-                title="กำไรสะสมรายออเดอร์", xaxis_title="ออเดอร์ที่",
-                yaxis_title="THB", showlegend=False,
-            )
-            st.plotly_chart(fig_pnl, **WIDE)
-        with g2:
-            fig_gate = go.Figure()
-            fig_gate.add_trace(go.Scatter(
-                y=led["FX ใช้สะสม (USD)"], x=led.index, name="FX ใช้สะสม",
-                line=dict(color="#3B82F6", width=2),
-            ))
-            fig_gate.add_hline(y=fx_limit_max,
-                               line=dict(color="#FF4B4B", dash="dash"),
-                               annotation_text="เพดาน FX Limit")
-            fig_gate.update_layout(
-                template="plotly_dark", height=320, margin=dict(t=40, b=20),
-                title="โควตา Outbound FX ที่ใช้ไป", xaxis_title="ออเดอร์ที่",
-                yaxis_title="USD", showlegend=False,
-            )
-            st.plotly_chart(fig_gate, **WIDE)
-
-        fig_cex = go.Figure()
-        fig_cex.add_trace(go.Scatter(
-            y=led["CEX Liquidity ใช้สะสม (บาท)"], x=led.index,
-            name="CEX Liquidity ใช้สะสม", line=dict(color="#8B5CF6", width=2),
-        ))
-        fig_cex.add_hline(y=cex_liquidity_thb,
-                          line=dict(color="#FF4B4B", dash="dash"),
-                          annotation_text="CEX Liquidity")
-        fig_cex.update_layout(
-            template="plotly_dark", height=300, margin=dict(t=40, b=20),
-            title="CEX Liquidity ที่ใช้ไป", xaxis_title="ออเดอร์ที่",
-            yaxis_title="THB", showlegend=False,
-        )
-        st.plotly_chart(fig_cex, **WIDE)
-
-        fig_nc = go.Figure()
-        fig_nc.add_trace(go.Scatter(
-            y=led["NC Buffer"], x=led.index, name="NC Buffer",
-            line=dict(color="#F59E0B", width=2),
-        ))
-        fig_nc.add_hline(y=0, line=dict(color="#FF4B4B", dash="dash"),
-                         annotation_text="เกณฑ์ขั้นต่ำ")
-        fig_nc.update_layout(
-            template="plotly_dark", height=300, margin=dict(t=40, b=20),
-            title="NC Buffer หลังแต่ละออเดอร์", xaxis_title="ออเดอร์ที่",
-            yaxis_title="THB", showlegend=False,
-        )
-        st.plotly_chart(fig_nc, **WIDE)
-
-        st.dataframe(
-            led.sort_index(ascending=False), height=380, **WIDE,
-            column_config={
-                "วันที่": st.column_config.TextColumn(),
-                "มูลค่า (บาท)": st.column_config.NumberColumn(format="%.0f"),
-                "ราคาที่ลูกค้าได้": st.column_config.NumberColumn(format="%.2f"),
-                "เหรียญที่ส่งมอบ": st.column_config.NumberColumn(format="%.6f"),
-                "Hedge (เหรียญ)": st.column_config.NumberColumn(format="%.6f"),
-                "Hedge (USD)": st.column_config.NumberColumn(format="%.0f"),
-                "CEX Liquidity ใช้ (บาท)": st.column_config.NumberColumn(format="%.0f"),
-                "Unhedged (บาท)": st.column_config.NumberColumn(format="%.0f"),
-                "Market Edge": st.column_config.NumberColumn(format="%.0f"),
-                "รายได้": st.column_config.NumberColumn(format="%.0f"),
-                "ต้นทุน": st.column_config.NumberColumn(format="%.0f"),
-                "กำไรออเดอร์": st.column_config.NumberColumn(format="%.0f"),
-                "สต็อกคงเหลือ": st.column_config.NumberColumn(format="%.6f"),
-                "FX ใช้สะสม (USD)": st.column_config.NumberColumn(format="%.0f"),
-                "CEX Liquidity ใช้สะสม (บาท)": st.column_config.NumberColumn(format="%.0f"),
-                "NC Buffer": st.column_config.NumberColumn(format="%.0f"),
-            },
-        )
-
-        sim_assumptions = dict(model_version=MODEL_VERSION)
-        sim_assumptions.update(ctx)
-        st.download_button(
-            "⬇️ ดาวน์โหลดสมุดออเดอร์ พร้อม Assumptions (CSV)",
-            to_csv_bytes_with_assumptions(
-                led.sort_index(ascending=False), sim_assumptions,
-                f"XSpring Time-Travel Order Journey — {asset}",
-            ),
-            f"xspring_orders_{asset}.csv",
-            "text/csv",
-            **WIDE,
-        )
-
-    with st.expander("📐 สมมติฐานของ Customer Order Simulator"):
-        target_coins_txt = fmt_coin(target_stock_thb / coin_price_thb_now, asset)
-        st.markdown(f"""
-- **Model version:** `{MODEL_VERSION}`
-- **การจำลองเวลา (Time-Travel):** ระบบเริ่มจากวันแรกของช่วงข้อมูลที่เลือก และจะสุ่มก้าวไปสู่วันถัดๆ ไป (ภายในกรอบเวลา) ทุกครั้งที่มีออเดอร์
-- ราคาอ้างอิง: ใช้ราคาปิดและอัตราแลกเปลี่ยนจริง **ณ วันที่สุ่มได้นั้นๆ**
-- เป้าสต็อกสำรอง `I* = a × V` → `{fmt_baht(target_stock_thb)}` ≈ `{target_coins_txt}`
-- **Buy-side:** หลังส่งมอบ ระบบเติม inventory กลับด้วยการซื้อบน Global CEX โดยกิน **Outbound FX quota**
-- **Sell-side:** หลังรับเหรียญ ระบบขาย inventory ส่วนเกินบน Global CEX โดยใช้ **CEX liquidity เดิม** และ **ไม่กิน outbound FX quota**
-- Buy-side hedge ได้ **บางส่วน** เมื่อ FX quota ไม่พอ; inventory จะไม่ถูกปล่อยให้ติดลบ
-- Sell-side hedge ได้ **บางส่วน** เมื่อ CEX liquidity ไม่พอ; ส่วนเกินกลายเป็น inventory exposure
-- P&L ของออเดอร์ใช้ **Market Edge จาก Quote เทียบ Global Reference แบบ direction-aware** + fee/benefit หักต้นทุน hedge/slippage
-- NC/Capital ในหน้านี้ใช้ **planning model เดียวกับ Capital Planner** ไม่ใช่ตัวรับรอง compliance อัตโนมัติ
-- CEX liquidity ฝั่ง Customer ใช้ค่า **CEX Margin เดิม (`{fmt_baht(cfg["cex_margin_thb"])}`)** เป็น proxy
-- **v1.4.0:** กระเป๋าเงินลูกค้าถือได้ **หลายเหรียญพร้อมกัน** (`customer_coins` เป็น dict);
-  เหรียญที่ไม่ได้เลือกเทรดอยู่ตอนนี้ตีมูลค่าด้วยราคาตลาดสดจาก Market Overview แทน time-travel price
-        """)
-
 
 def main() -> None:
     st.set_page_config(
@@ -2982,7 +2694,6 @@ def main() -> None:
         initial_sidebar_state="expanded",
     )
     st.markdown(THEME_CSS, unsafe_allow_html=True)
-    st.markdown(HERO_HTML, unsafe_allow_html=True)
 
     cfg = build_sidebar()
 
@@ -2998,9 +2709,9 @@ def main() -> None:
     price_lookup = {row["symbol"]: row["price_usd"] for _, row in market_df.iterrows()}
 
     tab1, tab2, tab3 = st.tabs([
-        "📊 5-Year Backtest Simulator & Market",
+        "📊 5-Year Backtest Simulator",
         "🧮 Liquidity & Capital Planner",
-        "🛒 Time-Travel Order Simulator",
+        "🛒 Exchange UI Simulator",
     ])
 
     with tab1:
