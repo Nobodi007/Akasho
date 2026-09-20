@@ -20,12 +20,11 @@ UI ถูกเรียกใต้ `if __name__ == "__main__"` เท่าน
 
 MODEL_VERSION / CHANGELOG
 -------------------------
-v1.5.29             + [FIX] กู้คืนระบบปุ่มใสล่องหนแบบคลิกเต็มแถว (Full-row Click) ใน Tab 4 กลับมา พร้อมกับระบบสลับแท็บ (Tab Switcher) แบบดั้งเดิมที่เสถียรที่สุด
-v1.5.28             + [UI] เปลี่ยนระบบนำทางกลับไปเป็น Tabs แบบเดิมที่มีเส้นใต้เขียวเท่ๆ
-v1.5.26             + [FIX] รวม Patch จาก Claude (ระบบ Logo Base64, กันกระเป๋าลูกค้าโดนล้างเวลาเปลี่ยนเหรียญ, ลบบั๊กหักเงินเบิ้ล)
-v1.5.24             + [FEATURE] กดเหรียญใน Wallet Tab 4 แล้ววาร์ปไปหน้าเทรด
+v1.5.27             + [FIX] ใช้ Radio Button ทำระบบนำทางแทน Tabs เพื่อแก้ปัญหาเด้งเปลี่ยนหน้า 100%
+                      ปรับ Native Columns ใน Tab 4 แทนตาราง HTML เดิมเพื่อแก้ปัญหาคลิกไม่ติด
+v1.5.26             + [FIX] อัปเดตระบบ Logo เป็น Base64 SVG + Multi-layer Background
+v1.5.24             + [FEATURE] กดเหรียญใน Wallet Tab 4 แล้ววาร์ปไปหน้าเทรด (Exchange UI Simulator Tab 3)
 v1.5.23             + [UI] จัดระเบียบ Tab 4 (Wallet): ลบปุ่ม Header และวงเงินต่อวันออกให้ดูสะอาดขึ้น
-v1.5.20             + [FEATURE] เพิ่มระบบ "กระเป๋าเงิน" (Wallet Tab 4) สไตล์ Bitkub
 """
 
 from __future__ import annotations
@@ -46,7 +45,7 @@ from typing import Any, Mapping, Optional
 import numpy as np
 import pandas as pd
 
-MODEL_VERSION = "1.5.29"
+MODEL_VERSION = "1.5.27"
 
 try:
     import yaml
@@ -972,9 +971,17 @@ def coin_icon_html(sym: str, size: int = 28) -> str:
             f'background-image:{layers};background-size:cover;background-position:center;"></span>')
 
 
+NAV_LABELS = [
+    "📊 5-Year Backtest Simulator",
+    "🧮 Liquidity & Capital Planner",
+    "🛒 Exchange UI Simulator",
+    "💼 กระเป๋าเงิน (Wallet)",
+]
+NAV_EXCHANGE = NAV_LABELS[2]
+
 def _go_to_exchange(sym: str) -> None:
     st.session_state["bt_asset"] = sym
-    st.session_state["force_tab_switch"] = 2
+    st.session_state["main_nav"] = NAV_EXCHANGE
 
 
 # =========================================================================
@@ -1285,34 +1292,58 @@ THEME_CSS = """
               font-variant-numeric: tabular-nums; }
     .mk-sel { background: #0a5c33 !important; }
 
-    /* Wallet Tab Styles (บูรณาการใหม่ทั้งหมด) */
+    /* Wallet Tab Styles */
     .wl-box { background: #181a20; border: 1px solid #2b3139; border-radius: 8px; padding: 20px; }
     .wl-total-val { font-size: 2.2rem; font-weight: 700; color: #EAECEF; font-variant-numeric: tabular-nums; margin: 4px 0; }
-    [class*="st-key-wlrow_"] { position: relative !important; }
-    [class*="st-key-wlrow_"] [data-testid="stVerticalBlock"] { gap: 0 !important; }
-    [class*="st-key-wlbtn_"] {
-        position: absolute !important; top: 0 !important; left: 0 !important;
-        right: 0 !important; bottom: 0 !important; width: 100% !important;
-        height: 100% !important; margin: 0 !important; z-index: 20 !important;
-    }
-    [class*="st-key-wlbtn_"] * { width: 100% !important; height: 100% !important; margin: 0 !important; padding: 0 !important; }
-    [class*="st-key-wlbtn_"] button {
-        display: block !important; border: none !important; background: transparent !important;
-        color: transparent !important; opacity: 0 !important; cursor: pointer !important;
-    }
-    .wl-tbl-row {
-        display: flex; padding: 16px; align-items: center; background: #181a20;
-        border-bottom: 1px solid #1f2329; border-left: 1px solid #2b3139; border-right: 1px solid #2b3139;
-    }
-    .wl-tbl-row, .wl-tbl-row * { pointer-events: none !important; }
-    [class*="st-key-wlrow_"]:hover .wl-tbl-row { background: #2b3139; }
-    .wl-col-ast { flex: 2; display: flex; align-items: center; gap: 12px; color: #EAECEF; font-weight: 600; font-size: 0.9rem; }
-    .wl-col-val { flex: 1.5; text-align: right; color: #EAECEF; font-size: 0.85rem; font-variant-numeric: tabular-nums; }
-    .wl-col-act { flex: 1.5; text-align: right; display: flex; justify-content: flex-end; gap: 16px; font-size: 0.8rem; font-weight: 600; }
-    .wl-act-link { color: #0ecb81; }
     .st-key-wl_table { gap: 0 !important; }
     .st-key-wlhead { padding: 12px 16px 8px; background: #181a20; border: 1px solid #2b3139; border-radius: 8px 8px 0 0; }
     .wl-h { font-size: 0.75rem; color: #848e9c; }
+    [class*="st-key-wlrow_"] { padding: 8px 16px; background: #181a20; border: 1px solid #2b3139; border-top: none; }
+    [class*="st-key-wlrow_"]:hover { background: #2b3139; }
+    [class*="st-key-wlbtn_"] button { justify-content: flex-start; padding: 0; color: #EAECEF !important; font-weight: 700; }
+    .wl-cell { color: #EAECEF; font-size: 0.85rem; text-align: right; font-variant-numeric: tabular-nums; }
+    .wl-acts { display: flex; justify-content: flex-end; gap: 16px; font-weight: 600; }
+    .wl-acts span:not(:last-child) { color: #0ecb81; }
+    .wl-name { line-height: 1.2; color: #EAECEF; font-weight: 600; font-size: 0.9rem; }
+    .wl-name span { font-size: 0.7rem; color: #848e9c; font-weight: 500; }
+
+    /* ---------- แปลง Main Navigation Radio ให้เป็น Tabs ตามรูป ---------- */
+    .st-key-main_nav [role="radiogroup"] {
+        gap: 16px; 
+        border-bottom: 1px solid #2b3139; 
+        padding-bottom: 0px; 
+        margin-bottom: 16px;
+    }
+    .st-key-main_nav label[data-baseweb="radio"] {
+        background: transparent !important; 
+        border: none !important;
+        padding: 0 4px 6px 4px !important; 
+        margin: 0 0 -1px 0 !important;
+        border-radius: 0 !important; 
+        border-bottom: 2px solid transparent !important;
+    }
+    /* ซ่อนปุ่มกลม (Radio Circle) */
+    .st-key-main_nav label[data-baseweb="radio"] > div:first-child {
+        display: none !important;
+    }
+    /* ปรับแต่งข้อความเริ่มต้น */
+    .st-key-main_nav label[data-baseweb="radio"] p {
+        font-weight: 600 !important; 
+        color: #848e9c !important; 
+        font-size: 0.95rem !important;
+        margin: 0 !important;
+    }
+    /* Hover State (ข้อความสีแดงตอนเอาเมาส์ชี้แบบในรูป) */
+    .st-key-main_nav label[data-baseweb="radio"]:hover p {
+        color: #ff4b4b !important;
+    }
+    /* Active State (เส้นใต้สีเขียว ข้อความสีขาว สำหรับแท็บที่ถูกเลือก) */
+    .st-key-main_nav label[data-baseweb="radio"]:has(input:checked) {
+        border-bottom: 2px solid #0ecb81 !important;
+    }
+    .st-key-main_nav label[data-baseweb="radio"]:has(input:checked) p {
+        color: #EAECEF !important;
+    }
 </style>
 """
 
@@ -2052,7 +2083,7 @@ def render_tab1(cfg: dict[str, Any], data: pd.DataFrame, data_err: Optional[str]
                 mode='markers',
                 marker=dict(
                     size=5,
-                    color=list(range(len(df_3d))), 
+                    color=list(range(len(df_3d))), # ไล่สีรุ้งตามเวลา
                     colorscale='Rainbow',          
                     opacity=0.8,
                     line=dict(width=0)
@@ -2691,7 +2722,7 @@ def render_tab4(cfg: dict[str, Any], data: pd.DataFrame, market_df: pd.DataFrame
     total_usdt = total_thb / usdthb_current if usdthb_current > 0 else 0
     time_str = pd.Timestamp.now(tz="Asia/Bangkok").strftime("%H:%M:%S")
 
-    # Header
+    # Header (ไม่มีปุ่มฝาก/ถอน/ประวัติ ตามที่ร้องขอ)
     st.markdown(
         f'<div style="margin-bottom:20px;">'
         f'<h2 style="margin:0; color:#EAECEF; font-size:1.8rem;">กระเป๋าเงิน</h2>'
@@ -2731,54 +2762,43 @@ def render_tab4(cfg: dict[str, Any], data: pd.DataFrame, market_df: pd.DataFrame
         qty = cust_coins.get(sym, 0.0)
         price = price_thb_map.get(sym, 0.0)
         assets_to_show.append({"sym": sym, "qty": qty, "price": price, "val": qty * price})
-
-    st.markdown(
-        f'<div style="background:#181a20; border:1px solid #2b3139; border-top-left-radius:8px; border-top-right-radius:8px;">'
-        f'<div class="wl-tbl-head">'
-        f'<div style="flex:2;">สินทรัพย์ ↕</div>'
-        f'<div style="flex:1.5; text-align:right;">มูลค่าทั้งหมด ↕</div>'
-        f'<div style="flex:1.5; text-align:right;">จำนวนที่ใช้ได้ ↕</div>'
-        f'<div style="flex:1.5; text-align:right;">รอดำเนินการ ↕</div>'
-        f'<div style="flex:1.5;"></div>'
-        f'</div></div>',
-        unsafe_allow_html=True
-    )
-
-    for a in assets_to_show:
-        if hide_small and a["val"] < 1.0:
-            continue
-        if search_q and search_q.lower() not in a["sym"].lower() and search_q.lower() not in COIN_NAMES.get(a["sym"], "").lower():
-            continue
-
-        sub_name = COIN_NAMES.get(a["sym"], "Thai Baht")
-
-        row_html = (
-            f'<div class="wl-tbl-row">'
-            f'<div class="wl-col-ast">'
-            f'{coin_icon_html(a["sym"], 28)}'
-            f'<div>'
-            f'<div style="line-height:1.2;">{a["sym"]}</div>'
-            f'<div style="font-size:0.7rem; color:#848e9c; font-weight:500;">{sub_name}</div>'
-            f'</div>'
-            f'</div>'
-            f'<div class="wl-col-val">{a["val"]:,.2f}</div>'
-            f'<div class="wl-col-val">{a["qty"]:,.6f}</div>'
-            f'<div class="wl-col-val" style="color:#848e9c;">0.00</div>'
-            f'<div class="wl-col-act">'
-            f'<span class="wl-act-link">ฝาก</span> '
-            f'<span class="wl-act-link">ถอน</span> '
-            f'<span style="color:#EAECEF; cursor:pointer;">•••</span>'
-            f'</div>'
-            f'</div>'
-        )
-
-        with st.container(key=f"wlrow_{a['sym']}"):
-            st.markdown(row_html, unsafe_allow_html=True)
-            if a["sym"] != "THB":
-                st.button("go", key=f"wlbtn_{a['sym']}", on_click=_go_to_exchange, args=(a["sym"],))
-
-    # ปิดขอบล่างของตาราง
-    st.markdown('<div style="border-top:1px solid #2b3139; margin-top:-1px;"></div>', unsafe_allow_html=True)
+        
+    WL = [2.2, 1.5, 1.5, 1.5, 1.3]
+    with st.container(key="wl_table"):
+        with st.container(key="wlhead"):
+            hc = st.columns(WL, vertical_alignment="center", gap="small")
+            heads = ["สินทรัพย์ ↕", "มูลค่าทั้งหมด ↕", "จำนวนที่ใช้ได้ ↕", "รอดำเนินการ ↕", ""]
+            aligns = ["left", "right", "right", "right", "right"]
+            for col, txt, al in zip(hc, heads, aligns):
+                col.markdown(f'<div class="wl-h" style="text-align:{al}">{txt}</div>',
+                             unsafe_allow_html=True)
+        for a in assets_to_show:
+            sym = a["sym"]
+            sub_name = COIN_NAMES.get(sym, "Thai Baht")
+            if hide_small and a["val"] < 1.0:
+                continue
+            if search_q and search_q.lower() not in sym.lower() \
+                    and search_q.lower() not in sub_name.lower():
+                continue
+            with st.container(key=f"wlrow_{sym}"):
+                c_ast, c_val, c_qty, c_pend, c_act = st.columns(
+                    WL, vertical_alignment="center", gap="small")
+                with c_ast:
+                    c_ic, c_nm = st.columns([1, 6], vertical_alignment="center", gap="small")
+                    c_ic.markdown(coin_icon_html(sym, 28), unsafe_allow_html=True)
+                    if sym == "THB":
+                        c_nm.markdown('<div class="wl-name">THB<br><span>Thai Baht</span></div>',
+                                      unsafe_allow_html=True)
+                    else:
+                        c_nm.button(f"{sym}  ·  {sub_name}", key=f"wlbtn_{sym}",
+                                    type="tertiary", on_click=_go_to_exchange, args=(sym,),
+                                    help=f"เปิดกราฟและหน้าเทรด {sym}")
+                c_val.markdown(f'<div class="wl-cell">{a["val"]:,.2f}</div>', unsafe_allow_html=True)
+                c_qty.markdown(f'<div class="wl-cell">{a["qty"]:,.6f}</div>', unsafe_allow_html=True)
+                c_pend.markdown('<div class="wl-cell" style="color:#848e9c;">0.00</div>',
+                                unsafe_allow_html=True)
+                c_act.markdown('<div class="wl-cell wl-acts"><span>ฝาก</span><span>ถอน</span>'
+                               '<span>•••</span></div>', unsafe_allow_html=True)
 
 
 def main() -> None:
@@ -2801,20 +2821,21 @@ def main() -> None:
 
     market_df = fetch_market_overview(SUPPORTED_ASSETS)
 
-    tab1, tab2, tab3, tab4 = st.tabs([
-        "📊 5-Year Backtest Simulator",
-        "🧮 Liquidity & Capital Planner",
-        "🛒 Exchange UI Simulator",
-        "💼 กระเป๋าเงิน (Wallet)",
-    ])
+    if "main_nav" not in st.session_state:
+        st.session_state["main_nav"] = NAV_LABELS[0]
 
-    with tab1:
+    nav = st.radio("เมนูหลัก", NAV_LABELS, horizontal=True, key="main_nav",
+                   label_visibility="collapsed")
+
+    if nav == NAV_LABELS[0]:
         render_tab1(cfg, data, data_err)
-    with tab2:
+    elif nav == NAV_LABELS[1]:
         render_tab2(cfg, data, data_err)
-    with tab3:
-        render_tab3(cfg, data, data_err, price_lookup={row["symbol"]: row["price_usd"] for _, row in market_df.iterrows()} if not market_df.empty else {}, market_df=market_df)
-    with tab4:
+    elif nav == NAV_LABELS[2]:
+        render_tab3(cfg, data, data_err,
+                    price_lookup={row["symbol"]: row["price_usd"] for _, row in market_df.iterrows()} if not market_df.empty else {},
+                    market_df=market_df)
+    else:
         render_tab4(cfg, data, market_df=market_df)
 
     st.markdown(
@@ -2824,34 +2845,6 @@ def main() -> None:
         "ไม่ใช่เครื่องมือรับรอง compliance</div>",
         unsafe_allow_html=True,
     )
-
-    # -------------------------------------------------------------
-    # JS Injection: ระบบวาร์ปสลับแท็บจากการกดปุ่มในฝั่ง Python
-    # -------------------------------------------------------------
-    tab_idx = st.session_state.get("force_tab_switch")
-    if tab_idx is not None:
-        unique_id = uuid.uuid4().hex
-        js = f"""
-        <script>
-        // {unique_id}
-        (function () {{
-          var idx = {int(tab_idx)}, tries = 0;
-          function go() {{
-            var list = window.parent.document.querySelector('[data-baseweb="tab-list"]');
-            var tabs = list ? list.querySelectorAll('button[role="tab"]') : [];
-            if (tabs.length > idx) {{
-              if (tabs[idx].getAttribute('aria-selected') !== 'true') tabs[idx].click();
-            }} else if (tries++ < 30) {{
-              setTimeout(go, 100);
-            }}
-          }}
-          go();
-        }})();
-        </script>
-        """
-        components.html(js, height=0, width=0)
-        del st.session_state["force_tab_switch"]
-
 
 if __name__ == "__main__":
     if not HAS_UI:
