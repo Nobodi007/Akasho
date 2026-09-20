@@ -20,7 +20,9 @@ UI ถูกเรียกใต้ `if __name__ == "__main__"` เท่าน
 
 MODEL_VERSION / CHANGELOG
 -------------------------
-v1.5.27             + [UI] ปรับ UI แผงเทรดให้ความสูงเท่ากันเป๊ะ (Alignment) ทั้งฝั่งซื้อและขาย
+v1.5.27             + [FEATURE] หน้า Dashboard Back Office ดูพอร์ตและกราฟรวมทุกเหรียญ
+                    + [FIX] แก้บั๊ก FX Limit ให้ตัดยอดรายเดือนอย่างถูกต้อง และอัปเดต Gauge อัตโนมัติ
+                    + [UI] ปรับ UI แผงเทรดให้ความสูงเท่ากันเป๊ะ (Alignment) ทั้งฝั่งซื้อและขาย
                     + [FEATURE] ตรึงราคาในแผงออเดอร์ (15 วินาที) และใช้ st.fragment เพื่อรีเฟรชเฉพาะแผง
                     + [FEATURE] ระบบบันทึกรายการโปรด (Favorites) ลงไฟล์
                     + [FEATURE] ระบบสุ่มออเดอร์ข้ามหลายเหรียญพร้อมกัน (Multi-Asset Batch Run) แบบ Log-Uniform
@@ -494,6 +496,7 @@ def sim_defaults(asset_name: str, start_date_val: Any, spot_usd: float,
         "inv_coins": {asset_name: (target_stock_thb / coin_price) if coin_price > 0 else 0.0},
         "target_thb": target_stock_thb,
         "fx_used_usd": 0.0,
+        "fx_used_usd_by_month": {},
         "cex_used_thb": 0.0,
         "pnl_thb": 0.0,
         "unhedged_thb": 0.0,
@@ -535,6 +538,7 @@ def sim_normalize_state(sim: Any, asset: str, start_date_val: Any,
     sim.setdefault("asset", asset)
     sim.setdefault("target_thb", target_stock_thb)
     sim.setdefault("fx_used_usd", 0.0)
+    sim.setdefault("fx_used_usd_by_month", {})
     sim.setdefault("cex_used_thb", 0.0)
     sim.setdefault("pnl_thb", 0.0)
     sim.setdefault("unhedged_thb", 0.0)
@@ -641,10 +645,14 @@ def execute_order(
     target_coins = (float(sim["target_thb"]) / coin_price_global
                     if coin_price_global > 0 else 0.0)
     inv_after_customer = inv_before - coins if side == "buy" else inv_before + coins
+    
+    month_str = order_date.strftime("%Y-%m")
+    fx_month_dict = sim.setdefault("fx_used_usd_by_month", {})
+    month_used = float(fx_month_dict.get(month_str, 0.0))
 
     if side == "buy":
         required_topup_coins = max(0.0, target_coins - inv_after_customer)
-        fx_left_usd = max(0.0, float(p["fx_limit"]) - float(sim["fx_used_usd"]))
+        fx_left_usd = max(0.0, float(p["fx_limit"]) - month_used)
         if spot > 0 and p["hedge_fee"] >= 0:
             max_hedge_by_fx = fx_left_usd / (spot * (1 + p["hedge_fee"]))
         else:
@@ -662,7 +670,7 @@ def execute_order(
                      "- " + fmt_baht(trading_fee)),
                     ("เหรียญที่ต้องส่งมอบ", fmt_coin(coins, current_asset)),
                     ("สต็อกก่อน", fmt_coin(inv_before, current_asset)),
-                    ("FX quotaเหลือ", f"$ {fx_left_usd:,.0f}"),
+                    ("FX quotaเหลือ (เดือนนี้)", f"$ {fx_left_usd:,.0f}"),
                     ("สูงสุดที่ hedge ได้ด้วย FX",
                      fmt_coin(feasible_hedge_coins, current_asset)),
                 ],
@@ -684,7 +692,7 @@ def execute_order(
                 "ต้นทุน": 0.0,
                 "กำไรออเดอร์": 0.0,
                 "สต็อกคงเหลือ": inv_before,
-                "FX ใช้สะสม (USD)": sim["fx_used_usd"],
+                "FX ใช้สะสม (USD)": month_used,
                 "CEX Liquidity ใช้สะสม (บาท)": sim["cex_used_thb"],
                 "NC Buffer": np.nan,
                 "ผลด่าน": "Reject — Inventory/FX ไม่พอ",
@@ -731,7 +739,7 @@ def execute_order(
     cex_used_thb_this_order = 0.0
 
     if side == "buy":
-        fx_left_usd = max(0.0, float(p["fx_limit"]) - float(sim["fx_used_usd"]))
+        fx_left_usd = max(0.0, float(p["fx_limit"]) - month_used)
         if spot > 0 and p["hedge_fee"] >= 0:
             max_hedge_by_fx = fx_left_usd / (spot * (1 + p["hedge_fee"]))
         else:
@@ -742,6 +750,8 @@ def execute_order(
         hedge_thb = hedged_coins * coin_price_global
         hedge_usd = hedged_coins * spot * (1 + p["hedge_fee"])
         sim["fx_used_usd"] += hedge_usd
+        fx_month_dict[month_str] = month_used + hedge_usd
+        
         if hedge_required_coins > 0:
             sim["inv_coins"][current_asset] += hedged_coins
         sim["unhedged_thb"] += residual_unhedged_coins * coin_price_global
@@ -777,7 +787,7 @@ def execute_order(
         else:
             hedge_note = ("CEX liquidity ไม่พอขาย inventory ส่วนเกินทั้งหมด "
                           "จึงเหลือ long exposure ค้าง")
-        fx_left_usd = max(0.0, float(p["fx_limit"]) - float(sim["fx_used_usd"]))
+        fx_left_usd = max(0.0, float(p["fx_limit"]) - month_used)
 
     steps.append(dict(
         n=4, t="ระบบตัดสินใจ Hedge อัตโนมัติ", s=hedge_status, note=hedge_note,
@@ -803,12 +813,11 @@ def execute_order(
         steps.append(dict(
             n=5, t="ด่าน FX Limit — Outbound", s=fx_status, note=gate_note,
             rows=[
-                ("FX ใช้ก่อนออเดอร์", f"$ {sim['fx_used_usd'] - hedge_usd:,.0f}"),
+                ("FX ใช้ก่อนออเดอร์ (เดือนนี้)", f"$ {month_used:,.0f}"),
                 ("ออเดอร์นี้ใช้", f"$ {hedge_usd:,.0f}"),
-                ("FX ใช้สะสมหลังออเดอร์", f"$ {sim['fx_used_usd']:,.0f}"),
-                ("FX Limit", f"$ {p['fx_limit']:,.0f}"),
-                ("FX เหลือ",
-                 f"$ {max(0.0, p['fx_limit'] - sim['fx_used_usd']):,.0f}"),
+                ("FX ใช้สะสมเดือนนี้", f"$ {month_used + hedge_usd:,.0f}"),
+                ("FX Limit ต่อเดือน", f"$ {p['fx_limit']:,.0f}"),
+                ("FX เหลือเดือนนี้", f"$ {max(0.0, p['fx_limit'] - (month_used + hedge_usd)):,.0f}"),
             ],
             total=("ส่วนที่ยัง Unhedged", fmt_baht(unhedged_thb_this_order)),
         ))
@@ -824,7 +833,7 @@ def execute_order(
                 ("ใช้สะสม", fmt_baht(sim["cex_used_thb"])),
                 ("CEX Liquidity เหลือ",
                  fmt_baht(max(0.0, p["cex_liquidity_thb"] - sim["cex_used_thb"]))),
-                ("FX ใช้สะสม", f"$ {sim['fx_used_usd']:,.0f}"),
+                ("FX ใช้สะสมเดือนนี้", f"$ {month_used:,.0f}"),
             ],
             total=("ส่วนที่ยัง Unhedged", fmt_baht(unhedged_thb_this_order)),
         ))
@@ -958,7 +967,7 @@ def execute_order(
         "ต้นทุน": cost,
         "กำไรออเดอร์": net,
         "สต็อกคงเหลือ": sim["inv_coins"][current_asset],
-        "FX ใช้สะสม (USD)": sim["fx_used_usd"],
+        "FX ใช้สะสม (USD)": month_used + hedge_usd if side == "buy" else month_used,
         "CEX Liquidity ใช้สะสม (บาท)": sim["cex_used_thb"],
         "NC Buffer": nc["buffer"],
         "ผลด่าน": gate_result,
@@ -2825,6 +2834,169 @@ if HAS_FRAGMENT:
 else:
     _order_panel_live = _order_panel_live_body
 
+def _bo_fig(fig, h=300, title=""):
+    fig.update_layout(template="plotly_dark", height=h, title=dict(text=title, font=dict(size=13)),
+                      margin=dict(t=36, b=20, l=10, r=10),
+                      paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                      showlegend=False)
+    return fig
+
+def render_backoffice(sim, cfg, ctx, target_stock_thb, price_thb) -> None:
+    orders = sim.get("orders", [])
+    if not orders:
+        st.info("ยังไม่มีออเดอร์ — กดซื้อ/ขาย หรือสุ่มออเดอร์เพื่อดูข้อมูลหลังบ้าน")
+        return
+    df = pd.DataFrame(orders)
+    df.index = range(1, len(df) + 1)
+    rej = df["ผลด่าน"].astype(str).str.startswith("Reject")
+    ok = df[~rej]
+
+    # ---------- คำนวณ ----------
+    inv_rows = []
+    for c, qty in sim["inv_coins"].items():
+        px = float(price_thb.get(c, 0.0))
+        val = float(qty) * px
+        inv_rows.append({"เหรียญ": c, "จำนวน": float(qty), "มูลค่า (THB)": val,
+                         "Target (THB)": target_stock_thb, "Exposure (THB)": val - target_stock_thb})
+    inv = pd.DataFrame(inv_rows)
+    pnl_c = ok.groupby("เหรียญ")["กำไรออเดอร์"].sum()
+    cnt_c = df.groupby("เหรียญ").size()
+    rej_c = df[rej].groupby("เหรียญ").size()
+    inv["กำไร (THB)"] = inv["เหรียญ"].map(pnl_c).fillna(0.0)
+    inv["ออเดอร์"] = inv["เหรียญ"].map(cnt_c).fillna(0).astype(int)
+    inv["ถูกปฏิเสธ"] = inv["เหรียญ"].map(rej_c).fillna(0).astype(int)
+
+    total_stock = float(inv["มูลค่า (THB)"].clip(lower=0).sum())
+    total_target = target_stock_thb * max(1, len(inv))
+    net_exposure = float(inv["Exposure (THB)"].sum())
+    gross_exposure = float(inv["Exposure (THB)"].abs().sum())
+
+    nc = nc_snapshot(total_stock, ctx["capital"], ctx["cex_margin"], ctx["liab"],
+                     ctx["h_crypto"], ctx["h_cex"], ctx["fixed_min_nc"],
+                     ctx["trading_risk_rate"], ctx["daily_volume_thb"], ctx["custody_rate"])
+    nc_util = nc["required"] / nc["actual"] if nc["actual"] > 0 else 9.99
+
+    gross_vol = float(ok["มูลค่า (บาท)"].sum())
+    buy_vol = float(ok.loc[ok["ฝั่ง"] == "ซื้อ", "มูลค่า (บาท)"].sum())
+    sell_vol = gross_vol - buy_vol
+    revenue, cost = float(ok["รายได้"].sum()), float(ok["ต้นทุน"].sum())
+    net_pnl = float(sim["pnl_thb"])
+
+    wins = int((ok["กำไรออเดอร์"] > 0).sum())
+    win_rate = wins / len(ok) * 100 if len(ok) else 0.0
+    partial = int((ok["Unhedged (บาท)"] > 0).sum())
+    hedge_cov = (1 - gross_exposure / total_target) * 100 if total_target > 0 else 100.0
+
+    cur_m = pd.to_datetime(sim.get("current_date")).strftime("%Y-%m")
+    fx_used = float(sim.get("fx_used_usd_by_month", {}).get(cur_m, 0.0))
+    fx_lim = float(cfg["fx_limit_max"])
+    cex_used, cex_lim = float(sim["cex_used_thb"]), float(ctx["cex_liquidity_thb"])
+
+    # ---------- การ์ด แถว 1 ----------
+    section("📦 สถานะหลังบ้าน")
+    r1 = st.columns(4)
+    metric_card(r1[0], f"สต็อกรวม {len(inv)} เหรียญ", fmt_baht(total_stock), None,
+                f"{total_stock / total_target * 100:,.0f}% ของเป้า {fmt_baht(total_target)}")
+    metric_card(r1[1], "โควตา Outbound FX ที่ใช้", f"$ {fx_used:,.0f}", None,
+                f"เหลือ $ {max(0, fx_lim - fx_used):,.0f} จาก $ {fx_lim:,.0f}")
+    metric_card(r1[2], "CEX Liquidity ที่ใช้", fmt_baht(cex_used), None,
+                f"เหลือ {fmt_baht(max(0, cex_lim - cex_used))} จาก {fmt_baht(cex_lim)}")
+    metric_card(r1[3], "กำไรสะสมของ Dealer", fmt_baht(net_pnl, True), net_pnl,
+                f"{len(df)} ออเดอร์ · เฉลี่ย {fmt_baht(net_pnl / len(df), True)}/ออเดอร์")
+
+    # ---------- การ์ด แถว 2 (เพิ่มใหม่) ----------
+    r2 = st.columns(4)
+    metric_card(r2[0], "Net Exposure (ส่วนต่างจาก target)", fmt_baht(net_exposure, True),
+                -abs(net_exposure) if abs(net_exposure) > 1 else 0,
+                f"Gross {fmt_baht(gross_exposure)} · Hedge Coverage {hedge_cov:,.1f}%")
+    metric_card(r2[1], "Gross Volume", fmt_baht(gross_vol), None,
+                f"ซื้อ {fmt_baht(buy_vol)} · ขาย {fmt_baht(sell_vol)}")
+    metric_card(r2[2], "Revenue / Cost", fmt_baht(revenue - cost, True), revenue - cost,
+                f"รายได้ {fmt_baht(revenue)} · ต้นทุน {fmt_baht(cost)}")
+    metric_card(r2[3], "Win Rate / Reject", f"{win_rate:.1f}%", None,
+                f"ปฏิเสธ {int(rej.sum())} · Hedge ไม่ครบ {partial} ออเดอร์")
+
+    # ---------- Gauges ----------
+    g = st.columns(4)
+    with g[0]:
+        gauge_bar("โควตา Outbound FX", fx_used, fx_lim, f"{fx_used / fx_lim * 100:.0f}%" if fx_lim else "-",
+                  f"ใช้ ${fx_used:,.0f} / ${fx_lim:,.0f}")
+    with g[1]:
+        gauge_bar("CEX Liquidity", cex_used, cex_lim, f"{cex_used / cex_lim * 100:.0f}%" if cex_lim else "-",
+                  f"ใช้ {fmt_baht(cex_used)} / {fmt_baht(cex_lim)}")
+    with g[2]:
+        gauge_bar("NC Utilization (NC ขั้นต่ำ ÷ NC จริง)", nc_util, 1.0, f"{nc_util * 100:.0f}%",
+                  f"Buffer {fmt_baht(nc['buffer'], True)}")
+    with g[3]:
+        gauge_bar("Exposure ÷ Target", gross_exposure, total_target,
+                  f"{gross_exposure / total_target * 100:.0f}%" if total_target else "-",
+                  f"Gross {fmt_baht(gross_exposure)}")
+
+    if ctx.get("hot_breach"):
+        verdict_box(True, "Hot Wallet เกินเพดาน", "สัดส่วน Hot Wallet สูงกว่าเกณฑ์ที่กำหนด", warn=True)
+
+    # ---------- ตารางต่อเหรียญ ----------
+    section("🪙 สถานะรายเหรียญ")
+    st.dataframe(inv.sort_values("มูลค่า (THB)", ascending=False).reset_index(drop=True),
+                 height=min(420, 40 + 35 * len(inv)), **WIDE)
+
+    # ---------- กราฟ ----------
+    section("📈 กราฟหลังบ้าน")
+    x = df.index
+    c1, c2 = st.columns(2)
+    f = go.Figure(go.Scatter(x=x, y=df["กำไรออเดอร์"].cumsum(), line=dict(color="#0ecb81", width=2),
+                             fill="tozeroy", fillcolor="rgba(14,203,129,0.12)"))
+    c1.plotly_chart(_bo_fig(f, 300, "กำไรสะสมรายออเดอร์ (THB)"), **WIDE)
+
+    f = go.Figure(go.Scatter(x=x, y=df["FX ใช้สะสม (USD)"], line=dict(color="#3B82F6", width=2)))
+    f.add_hline(y=fx_lim, line=dict(color="#f6465d", dash="dash"), annotation_text="FX Limit")
+    c2.plotly_chart(_bo_fig(f, 300, "โควตา Outbound FX ที่ใช้ไป (USD)"), **WIDE)
+
+    c3, c4 = st.columns(2)
+    f = go.Figure(go.Scatter(x=x, y=df["CEX Liquidity ใช้สะสม (บาท)"], line=dict(color="#9945FF", width=2)))
+    f.add_hline(y=cex_lim, line=dict(color="#f6465d", dash="dash"), annotation_text="CEX Liquidity")
+    c3.plotly_chart(_bo_fig(f, 300, "CEX Liquidity ที่ใช้ไป (THB)"), **WIDE)
+
+    f = go.Figure(go.Scatter(x=x, y=df["NC Buffer"], line=dict(color="#fcd535", width=2)))
+    f.add_hline(y=0, line=dict(color="#f6465d", dash="dash"), annotation_text="ขั้นต่ำ")
+    c4.plotly_chart(_bo_fig(f, 300, "NC Buffer หลังแต่ละออเดอร์ (THB)"), **WIDE)
+
+    # --- กราฟที่เพิ่มใหม่ ---
+    c5, c6 = st.columns(2)
+    f = go.Figure(go.Bar(x=inv["เหรียญ"], y=inv["กำไร (THB)"],
+                         marker_color=["#0ecb81" if v >= 0 else "#f6465d" for v in inv["กำไร (THB)"]]))
+    c5.plotly_chart(_bo_fig(f, 300, "กำไรแยกตามเหรียญ (THB)"), **WIDE)
+
+    f = go.Figure(go.Bar(x=inv["เหรียญ"], y=inv["Exposure (THB)"],
+                         marker_color=["#fcd535" if v >= 0 else "#f6465d" for v in inv["Exposure (THB)"]]))
+    f.add_hline(y=0, line=dict(color="#848e9c"))
+    c6.plotly_chart(_bo_fig(f, 300, "Exposure แยกตามเหรียญ (+ถือเกิน / −ขาด)"), **WIDE)
+
+    c7, c8 = st.columns(2)
+    vol = ok.pivot_table(index="เหรียญ", columns="ฝั่ง", values="มูลค่า (บาท)", aggfunc="sum", fill_value=0)
+    f = go.Figure()
+    if "ซื้อ" in vol:
+        f.add_trace(go.Bar(name="ซื้อ", x=vol.index, y=vol["ซื้อ"], marker_color="#0ecb81"))
+    if "ขาย" in vol:
+        f.add_trace(go.Bar(name="ขาย", x=vol.index, y=vol["ขาย"], marker_color="#f6465d"))
+    f.update_layout(barmode="group")
+    c7.plotly_chart(_bo_fig(f, 300, "Buy / Sell Volume แยกตามเหรียญ (THB)").update_layout(showlegend=True), **WIDE)
+
+    rc = ok.groupby("เหรียญ")[["รายได้", "ต้นทุน"]].sum()
+    f = go.Figure([go.Bar(name="รายได้", x=rc.index, y=rc["รายได้"], marker_color="#0ecb81"),
+                   go.Bar(name="ต้นทุน", x=rc.index, y=-rc["ต้นทุน"], marker_color="#f6465d")])
+    f.update_layout(barmode="relative")
+    c8.plotly_chart(_bo_fig(f, 300, "Revenue vs Cost แยกตามเหรียญ (THB)").update_layout(showlegend=True), **WIDE)
+
+    m = ok.assign(เดือน=pd.to_datetime(ok["วันที่"]).dt.to_period("M").astype(str)) \
+          .groupby("เดือน")["Hedge (USD)"].sum()
+    f = go.Figure(go.Bar(x=m.index, y=m.values, marker_color="#3B82F6"))
+    f.add_hline(y=fx_lim, line=dict(color="#f6465d", dash="dash"), annotation_text="FX Limit/เดือน")
+    st.plotly_chart(_bo_fig(f, 280, "การใช้ FX รายเดือนเทียบ Limit (USD)"), **WIDE)
+
+    with st.expander("ดาวน์โหลดสมุดออเดอร์ (CSV)"):
+        st.download_button("⬇️ Ledger CSV", to_csv_bytes(df), "xspring_ledger.csv", "text/csv", **WIDE)
+
 
 def render_tab3(cfg: dict[str, Any], data: pd.DataFrame, data_err: Optional[str],
                 price_lookup: Optional[dict[str, float]] = None,
@@ -3004,7 +3176,7 @@ def render_tab3(cfg: dict[str, Any], data: pd.DataFrame, data_err: Optional[str]
 
         st.markdown('<div style="margin-top:14px;"></div>', unsafe_allow_html=True)
         t_route, t_ledger, t_wallet = st.tabs(
-            ["🚀 System Routing (ออเดอร์ล่าสุด)", "📒 สมุดออเดอร์ (Ledger)", "💼 Wallet & Capital"])
+            ["🚀 System Routing", "📒 สมุดออเดอร์ (Ledger)", "🏢 Back Office"])
 
         with t_route:
             steps_now = st.session_state.get("sim_steps", [])
@@ -3024,19 +3196,10 @@ def render_tab3(cfg: dict[str, Any], data: pd.DataFrame, data_err: Optional[str]
                 st.dataframe(led.sort_index(ascending=False), height=240, **WIDE)
 
         with t_wallet:
-            stock_thb_now = (max(0.0, sim["inv_coins"].get(asset, 0.0))
-                             * spot_usd_current * usdthb_current)
-            fx_left = max(0.0, cfg["fx_limit_max"] - sim["fx_used_usd"])
-            c1, c2, c3 = st.columns(3)
-            with c1:
-                st.metric("สต็อกคงเหลือ (THB)", fmt_baht(stock_thb_now))
-                st.metric("เหรียญคงเหลือ", fmt_coin(sim["inv_coins"].get(asset, 0.0), asset))
-            with c2:
-                st.metric("Outbound FX ใช้ไป ($)", f"{sim['fx_used_usd']:,.0f}")
-                st.metric("FX โควตาคงเหลือ ($)", f"{fx_left:,.0f}")
-            with c3:
-                st.metric("กำไรสะสม Dealer (THB)", fmt_baht(sim["pnl_thb"], True))
-                st.metric("ออเดอร์ทั้งหมด", f"{len(sim['orders'])} รายการ")
+            price_thb = {r["symbol"]: float(r["price_usd"]) * usdthb_current
+                         for _, r in (market_df if market_df is not None else pd.DataFrame()).iterrows()}
+            price_thb[asset] = spot_usd_current * usdthb_current
+            render_backoffice(sim, cfg, ctx, target_stock_thb, price_thb)
 
 
 def _parse_amount(text: Any) -> float:
