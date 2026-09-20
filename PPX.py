@@ -20,9 +20,10 @@ UI ถูกเรียกใต้ `if __name__ == "__main__"` เท่าน
 
 MODEL_VERSION / CHANGELOG
 -------------------------
-v1.5.5              + แก้ไข TypeError ตอนเรียก render_tab1 ในฟังก์ชัน main (ตัด parameter market_df ออก)
-v1.5.4              + ทำระบบ "คลิกเหรียญแล้วกราฟเปลี่ยนตาม" (Clickable Market Rows via Query Params)
-                      + ปรับ UI คอลัมน์ซ้ายของ Tab 3 ให้ตรงตาม Layout กระดานเทรดจริง (มีแท็บ %เพิ่ม/%ลด และเลือกรายการโปรด)
+v1.5.6              + แก้ไขปัญหาคลิกเหรียญแล้วเด้งหน้าใหม่ (เปลี่ยนไปใช้ Native Button แทน HTML Link)
+                      + แก้บัครายการโปรดไม่ยอมอัปเดต (แยก Cache Data ออกจากการคัดกรองเหรียญ)
+v1.5.5              + แก้ไข TypeError ตอนเรียก render_tab1 ในฟังก์ชัน main
+v1.5.4              + ทำระบบ "คลิกเหรียญแล้วกราฟเปลี่ยนตาม"
 v1.5.3              + ย้าย Market Overview มาไว้ด้านซ้าย และแก้ไข CDN รูปภาพเหรียญทั้งหมด
 v1.5.2              + ลบฟังก์ชัน Orderbook และเหรียญที่ไม่ได้รองรับโลโก้ออกเพื่อลดการประมวลผลเครื่อง
 """
@@ -44,7 +45,7 @@ from typing import Any, Mapping, Optional
 import numpy as np
 import pandas as pd
 
-MODEL_VERSION = "1.5.5"
+MODEL_VERSION = "1.5.6"
 
 try:
     import yaml
@@ -1041,8 +1042,7 @@ def fetch_price_data(ticker: str, start: Any, end: Any,
 
 
 @_cache_data(ttl=60, show_spinner=False)
-def fetch_market_overview(tickers: list[str], favorites: list[str] = None) -> pd.DataFrame:
-    favorites = favorites or []
+def fetch_market_overview(tickers: list[str]) -> pd.DataFrame:
     rows = []
     for t in tickers:
         try:
@@ -1060,7 +1060,6 @@ def fetch_market_overview(tickers: list[str], favorites: list[str] = None) -> pd
                 "price_usd": last_price,
                 "pct_change": pct_change,
                 "volume": volume_24h,
-                "is_favorite": t in favorites,
             })
         except Exception:
             continue
@@ -1202,17 +1201,12 @@ THEME_CSS = """
     .ex-green { color: #0ecb81 !important; }
     .ex-red { color: #f6465d !important; }
 
-    .mk-row { display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #2b3139; cursor: pointer; transition: background 0.2s; }
-    .mk-row:hover { background: #2b3139 !important; }
-    .mk-coin { display: flex; align-items: center; gap: 10px; }
-    .mk-price { font-size: 0.9rem; font-weight: 700; color: #EAECEF; text-align: right; }
-    .mk-vol { font-size: 0.8rem; text-align: right; }
-
     .oe-tabs { display: flex; gap: 16px; border-bottom: 1px solid #2b3139; padding-bottom: 8px; margin-bottom: 16px; }
     .oe-tab { font-size: 0.9rem; font-weight: 600; color: #848e9c; cursor: pointer; }
     .oe-tab.active { color: #EAECEF; border-bottom: 2px solid #fcd535; padding-bottom: 6px; margin-bottom: -8px; }
     .oe-bal { display: flex; justify-content: space-between; font-size: 0.8rem; color: #848e9c; margin-bottom: 16px; }
 
+    /* Fix Streamlit Buttons to look like Exchange Action buttons */
     button[data-testid="baseButton-secondary"]:has(div:contains("ซื้อ")) {
         background-color: #0ecb81 !important; color: white !important; border: none !important; width: 100% !important; font-weight: bold; padding: 12px !important;
     }
@@ -1223,7 +1217,10 @@ THEME_CSS = """
         background-color: #fcd535 !important; color: #181a20 !important; border: none !important; font-weight: bold; width: 100% !important;
     }
     
-    a { text-decoration: none !important; }
+    /* Transparent Button Overlay for Market List */
+    button[data-testid="baseButton-secondary"]:has(div:contains("เลือก")) {
+        background-color: #2b3139 !important; color: #0ecb81 !important; border: none !important; font-size: 0.8rem !important; padding: 4px !important;
+    }
 </style>
 """
 
@@ -1579,16 +1576,6 @@ def render_audit_log_sidebar():
 # =========================================================================
 
 def build_sidebar() -> dict[str, Any]:
-    # ระบบรับคลิกจาก HTML Market List
-    if "asset" in st.query_params:
-        asset_qp = st.query_params.get("asset")
-        if asset_qp in SUPPORTED_ASSETS:
-            st.session_state["bt_asset"] = asset_qp
-        try:
-            st.query_params.clear()
-        except Exception:
-            pass
-
     with st.sidebar:
         st.markdown("### ⚙️ Backtest Settings")
 
@@ -2213,12 +2200,14 @@ def render_tab2(cfg: dict[str, Any], data: pd.DataFrame, data_err: Optional[str]
 
 def render_market_column_view(df: pd.DataFrame, mode: str, current_asset: str, usdthb: float) -> str:
     if df.empty:
-        return '<div style="padding:16px; color:#848e9c; font-size:0.85rem; text-align:center;">ไม่มีข้อมูลตลาด</div>'
+        st.markdown('<div style="padding:16px; color:#848e9c; font-size:0.85rem; text-align:center;">ไม่มีข้อมูลตลาด</div>', unsafe_allow_html=True)
+        return
     
     if mode == "favorite":
         view = df[df["is_favorite"]]
         if view.empty:
-            return '<div style="padding:32px 8px; color:#848e9c; font-size:0.9rem; text-align:center;">ยังไม่มีรายการโปรด<br><span style="font-size:0.8rem;">(จัดการด้านล่าง)</span></div>'
+            st.markdown('<div style="padding:32px 8px; color:#848e9c; font-size:0.9rem; text-align:center;">ยังไม่มีรายการโปรด<br><span style="font-size:0.8rem;">(จัดการด้านล่าง)</span></div>', unsafe_allow_html=True)
+            return
         view = view.sort_values("volume", ascending=False)
     elif mode == "volume":
         view = df.sort_values("volume", ascending=False)
@@ -2229,7 +2218,8 @@ def render_market_column_view(df: pd.DataFrame, mode: str, current_asset: str, u
     else:
         view = df
 
-    rows_html = ['<div style="display:flex; justify-content:space-between; font-size:0.75rem; color:#848e9c; margin-bottom:8px; padding:0 4px;"><span>สินทรัพย์</span><span>ราคาล่าสุด</span></div>']
+    st.markdown('<div style="display:flex; justify-content:space-between; font-size:0.75rem; color:#848e9c; margin-bottom:8px; padding:0 4px;"><span>สินทรัพย์</span><span>ราคา (THB)</span></div>', unsafe_allow_html=True)
+    
     for _, row in view.iterrows():
         sym = str(row["symbol"])
         name = COIN_NAMES.get(sym, sym)
@@ -2238,28 +2228,23 @@ def render_market_column_view(df: pd.DataFrame, mode: str, current_asset: str, u
         pct = float(row["pct_change"])
         c_class = "ex-green" if pct >= 0 else "ex-red"
         sign = "+" if pct >= 0 else ""
-        logo = COIN_LOGOS.get(sym, "https://cdn-icons-png.flaticon.com/512/1490/1490844.png")
+        logo = get_coin_logo(sym)
         
-        bg_style = "background: #2b3139; border-radius: 6px; padding: 8px 10px; margin-bottom: 4px; border-left: 3px solid #0ecb81;" if sym == current_asset else "background: transparent; padding: 8px 10px; border-bottom: 1px solid #1f2329; margin-bottom: 2px;"
         p_str = f"{p_thb:,.2f}" if p_thb >= 1 else f"{p_thb:,.4f}"
         
-        r = (
-            f'<a href="?asset={sym}" target="_self" style="text-decoration: none; color: inherit; display: block;">'
-            f'<div class="mk-row" style="{bg_style}">'
-            f'<div class="mk-coin">'
-            f'<img src="{logo}" style="width:28px; height:28px; border-radius:50%; object-fit:contain; background:#181a20; padding:1px;">'
-            f'<div style="line-height:1.2;">'
-            f'<div style="font-weight:700; color:#EAECEF; font-size:0.95rem;">{sym}</div>'
-            f'<div style="font-size:0.72rem; color:#848e9c;">{name}</div>'
-            f'</div></div>'
-            f'<div style="text-align:right;">'
-            f'<div class="mk-price" style="font-size:0.95rem; font-weight:700; color:#EAECEF;">{p_str}</div>'
-            f'<div class="mk-vol {c_class}" style="font-size:0.8rem; font-weight:600;">{sign}{pct:.2f}%</div>'
-            f'</div></div>'
-            f'</a>'
-        )
-        rows_html.append(r)
-    return "".join(rows_html)
+        c1, c2, c3, c4 = st.columns([1.2, 3, 3, 2.5])
+        with c1:
+            st.markdown(f'<img src="{logo}" style="width:26px; height:26px; border-radius:50%; object-fit:contain; background:#181a20; padding:1px; margin-top:8px;">', unsafe_allow_html=True)
+        with c2:
+            st.markdown(f"<div style='line-height:1.2; margin-top:6px;'><b style='color:#EAECEF;font-size:0.9rem;'>{sym}</b><br><span style='font-size:0.7rem;color:#848e9c;'>{name}</span></div>", unsafe_allow_html=True)
+        with c3:
+            st.markdown(f"<div style='line-height:1.2; margin-top:6px; text-align:right;'><b style='color:#EAECEF;font-size:0.9rem;'>{p_str}</b><br><span class='{c_class}' style='font-size:0.75rem;font-weight:600;'>{sign}{pct:.2f}%</span></div>", unsafe_allow_html=True)
+        with c4:
+            st.markdown("<div style='margin-top:6px;'></div>", unsafe_allow_html=True)
+            if st.button("เลือก", key=f"sel_{mode}_{sym}", use_container_width=True):
+                st.session_state["bt_asset"] = sym
+                st.rerun()
+        st.markdown("<hr style='margin: 2px 0; border: none; border-bottom: 1px solid #1f2329;'>", unsafe_allow_html=True)
 
 @_fragment
 def render_tab3(cfg: dict[str, Any], data: pd.DataFrame, data_err: Optional[str],
@@ -2327,7 +2312,7 @@ def render_tab3(cfg: dict[str, Any], data: pd.DataFrame, data_err: Optional[str]
     # --- TOP HEADER BAR ---
     top_bar_html = f"""<div class="ex-header">
         <div style="display:flex; align-items:center; gap:12px;">
-            <img src="{COIN_LOGOS.get(asset, 'https://cdn-icons-png.flaticon.com/512/1490/1490844.png')}" style="width:40px; height:40px; border-radius:50%; background:#181a20; padding:2px;">
+            <img src="{get_coin_logo(asset)}" onerror="this.src='https://cdn-icons-png.flaticon.com/512/1490/1490844.png'" style="width:40px; height:40px; border-radius:50%; background:#181a20; padding:2px;">
             <div class="ex-stat">
                 <span style="font-size:1.4rem; font-weight:700; color:#EAECEF;">{asset}/THB</span>
                 <span style="font-size:0.8rem; font-weight:600;" class="ex-green">เปลี่ยน 24H +1.26%</span>
@@ -2342,7 +2327,7 @@ def render_tab3(cfg: dict[str, Any], data: pd.DataFrame, data_err: Optional[str]
     st.markdown(top_bar_html, unsafe_allow_html=True)
 
     # --- MAIN LAYOUT (Columns: Market Overview | Chart & Tabs | Order Entry) ---
-    col_left, col_center, col_right = st.columns([2.4, 4.8, 2.8], gap="small")
+    col_left, col_center, col_right = st.columns([2.6, 5, 2.6], gap="small")
 
     # --- LEFT COLUMN: Market Overview Tabs ---
     with col_left:
@@ -2352,13 +2337,21 @@ def render_tab3(cfg: dict[str, Any], data: pd.DataFrame, data_err: Optional[str]
         
         sub1, sub2, sub3, sub4 = st.tabs(["⭐ โปรด", "ปริมาณ", "% เพิ่ม", "% ลด"])
         with sub1:
-            st.markdown(f'<div style="height:480px; overflow-y:auto; padding-right:4px;">{render_market_column_view(m_df, "favorite", asset, usdthb_current)}</div>', unsafe_allow_html=True)
+            st.markdown(f'<div style="height:480px; overflow-y:auto; padding-right:4px;">', unsafe_allow_html=True)
+            render_market_column_view(m_df, "favorite", asset, usdthb_current)
+            st.markdown('</div>', unsafe_allow_html=True)
         with sub2:
-            st.markdown(f'<div style="height:480px; overflow-y:auto; padding-right:4px;">{render_market_column_view(m_df, "volume", asset, usdthb_current)}</div>', unsafe_allow_html=True)
+            st.markdown(f'<div style="height:480px; overflow-y:auto; padding-right:4px;">', unsafe_allow_html=True)
+            render_market_column_view(m_df, "volume", asset, usdthb_current)
+            st.markdown('</div>', unsafe_allow_html=True)
         with sub3:
-            st.markdown(f'<div style="height:480px; overflow-y:auto; padding-right:4px;">{render_market_column_view(m_df, "top_gain", asset, usdthb_current)}</div>', unsafe_allow_html=True)
+            st.markdown(f'<div style="height:480px; overflow-y:auto; padding-right:4px;">', unsafe_allow_html=True)
+            render_market_column_view(m_df, "top_gain", asset, usdthb_current)
+            st.markdown('</div>', unsafe_allow_html=True)
         with sub4:
-            st.markdown(f'<div style="height:480px; overflow-y:auto; padding-right:4px;">{render_market_column_view(m_df, "top_loss", asset, usdthb_current)}</div>', unsafe_allow_html=True)
+            st.markdown(f'<div style="height:480px; overflow-y:auto; padding-right:4px;">', unsafe_allow_html=True)
+            render_market_column_view(m_df, "top_loss", asset, usdthb_current)
+            st.markdown('</div>', unsafe_allow_html=True)
 
         st.markdown('<div style="margin-top:16px;"></div>', unsafe_allow_html=True)
         with st.expander("⭐ เลือกเหรียญโปรด", expanded=False):
@@ -2446,7 +2439,7 @@ def render_tab3(cfg: dict[str, Any], data: pd.DataFrame, data_err: Optional[str]
             st.session_state.sim = sim_defaults(asset, first_day, data.loc[first_day, "Global_USD"], data.loc[first_day, "USDTHB"], target_stock_thb)
             st.session_state.sim_signature = signature
             st.session_state.sim_steps = []
-            _rerun_fragment()
+            st.rerun()
 
         if send:
             steps, _rec = execute_order(sim, side_key, float(order_amt), current_date_val, data.loc[current_date_val], ctx)
@@ -2456,7 +2449,7 @@ def render_tab3(cfg: dict[str, Any], data: pd.DataFrame, data_err: Optional[str]
                 sim["current_date"] = pd.to_datetime(np.random.choice(valid_dates))
             else:
                 sim["current_date"] = pd.to_datetime(data.index[-1])
-            _rerun_fragment()
+            st.rerun()
 
         if run_batch:
             rng = np.random.default_rng(int(seed))
@@ -2480,7 +2473,7 @@ def render_tab3(cfg: dict[str, Any], data: pd.DataFrame, data_err: Optional[str]
 
             sim["current_date"] = pd.to_datetime(chosen_dates[-1])
             st.session_state.sim_steps = last_steps
-            _rerun_fragment()
+            st.rerun()
 
 def main() -> None:
     st.set_page_config(
@@ -2500,9 +2493,12 @@ def main() -> None:
                                           cfg["end_date"],
                                           use_fx_proxy=cfg["use_fx_proxy"])
 
+    market_df = fetch_market_overview(SUPPORTED_ASSETS)
     favorites = st.session_state.get("favorite_tickers", [])
-    market_df = fetch_market_overview(SUPPORTED_ASSETS, favorites)
-    price_lookup = {row["symbol"]: row["price_usd"] for _, row in market_df.iterrows()}
+    if not market_df.empty:
+        market_df["is_favorite"] = market_df["symbol"].isin(favorites)
+
+    price_lookup = {row["symbol"]: row["price_usd"] for _, row in market_df.iterrows()} if not market_df.empty else {}
 
     tab1, tab2, tab3 = st.tabs([
         "📊 5-Year Backtest Simulator",
