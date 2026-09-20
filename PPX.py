@@ -20,6 +20,7 @@ UI ถูกเรียกใต้ `if __name__ == "__main__"` เท่าน
 
 MODEL_VERSION / CHANGELOG
 -------------------------
+v1.5.11             + แก้ Vol ผิดหน่วย (yfinance Volume ของคริปโตเป็น USD อยู่แล้ว ไม่ต้องคูณราคาอีก)
 v1.5.10             + แก้ราคาซ้อนทับ (จัดราคา/% เป็นคอลัมน์ขวาซ้อน 2 บรรทัด, โลโก้ไม่ถูกบีบ) และแท็บ "ปริมาณ" แสดง Vol เป็นบาท
 v1.5.9              + แก้ดีไซน์รายการเหรียญ (Market) ให้เหมือน Bitkub: วาดทั้งแถวเป็น HTML
                       + ปุ่มดาว/ปุ่มเลือกเหรียญเป็นปุ่มโปร่งใสวางทับ โดยจับด้วย class `st-key-*`
@@ -54,7 +55,7 @@ from typing import Any, Mapping, Optional
 import numpy as np
 import pandas as pd
 
-MODEL_VERSION = "1.5.10"
+MODEL_VERSION = "1.5.11"
 
 try:
     import yaml
@@ -2290,7 +2291,7 @@ def render_market_column_view(df: pd.DataFrame, mode: str, current_asset: str, u
         c_class = "ex-green" if pct >= 0 else "ex-red"
         star_on = sym in favs
         sel_cls = " mk-sel" if sym == current_asset else ""
-        vol_thb = float(row["volume"]) * p_thb   # volume เป็นจำนวนเหรียญ -> แปลงเป็นบาท
+        vol_thb = float(row["volume"]) * usdthb   # yfinance crypto: Volume เป็นมูลค่า USD อยู่แล้ว -> คูณเรทเป็นบาท
         if mode == "volume":
             sub = f'<span class="mk-vol">Vol ฿{fmt_num(vol_thb)}</span>'
         else:
