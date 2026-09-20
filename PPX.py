@@ -20,6 +20,7 @@ UI ถูกเรียกใต้ `if __name__ == "__main__"` เท่าน
 
 MODEL_VERSION / CHANGELOG
 -------------------------
+v1.5.5              + แก้ไข TypeError ตอนเรียก render_tab1 ในฟังก์ชัน main (ตัด parameter market_df ออก)
 v1.5.4              + ทำระบบ "คลิกเหรียญแล้วกราฟเปลี่ยนตาม" (Clickable Market Rows via Query Params)
                       + ปรับ UI คอลัมน์ซ้ายของ Tab 3 ให้ตรงตาม Layout กระดานเทรดจริง (มีแท็บ %เพิ่ม/%ลด และเลือกรายการโปรด)
 v1.5.3              + ย้าย Market Overview มาไว้ด้านซ้าย และแก้ไข CDN รูปภาพเหรียญทั้งหมด
@@ -43,7 +44,7 @@ from typing import Any, Mapping, Optional
 import numpy as np
 import pandas as pd
 
-MODEL_VERSION = "1.5.4"
+MODEL_VERSION = "1.5.5"
 
 try:
     import yaml
@@ -2237,7 +2238,7 @@ def render_market_column_view(df: pd.DataFrame, mode: str, current_asset: str, u
         pct = float(row["pct_change"])
         c_class = "ex-green" if pct >= 0 else "ex-red"
         sign = "+" if pct >= 0 else ""
-        logo = get_coin_logo(sym)
+        logo = COIN_LOGOS.get(sym, "https://cdn-icons-png.flaticon.com/512/1490/1490844.png")
         
         bg_style = "background: #2b3139; border-radius: 6px; padding: 8px 10px; margin-bottom: 4px; border-left: 3px solid #0ecb81;" if sym == current_asset else "background: transparent; padding: 8px 10px; border-bottom: 1px solid #1f2329; margin-bottom: 2px;"
         p_str = f"{p_thb:,.2f}" if p_thb >= 1 else f"{p_thb:,.4f}"
@@ -2326,7 +2327,7 @@ def render_tab3(cfg: dict[str, Any], data: pd.DataFrame, data_err: Optional[str]
     # --- TOP HEADER BAR ---
     top_bar_html = f"""<div class="ex-header">
         <div style="display:flex; align-items:center; gap:12px;">
-            <img src="{get_coin_logo(asset)}" onerror="this.src='https://cdn-icons-png.flaticon.com/512/1490/1490844.png'" style="width:40px; height:40px; border-radius:50%; background:#181a20; padding:2px;">
+            <img src="{COIN_LOGOS.get(asset, 'https://cdn-icons-png.flaticon.com/512/1490/1490844.png')}" style="width:40px; height:40px; border-radius:50%; background:#181a20; padding:2px;">
             <div class="ex-stat">
                 <span style="font-size:1.4rem; font-weight:700; color:#EAECEF;">{asset}/THB</span>
                 <span style="font-size:0.8rem; font-weight:600;" class="ex-green">เปลี่ยน 24H +1.26%</span>
@@ -2510,7 +2511,7 @@ def main() -> None:
     ])
 
     with tab1:
-        render_tab1(cfg, data, data_err, market_df)
+        render_tab1(cfg, data, data_err)
     with tab2:
         render_tab2(cfg, data, data_err)
     with tab3:
