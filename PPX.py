@@ -2706,17 +2706,6 @@ def render_tab3(cfg: dict[str, Any], data: pd.DataFrame, data_err: Optional[str]
         <div style="color:#6B7280;font-size:0.8rem;margin-top:16px;">↻ อัปเดตล่าสุด: {update_time}</div>
     </div>
     <div style="padding:0 20px;">
-        <div style="display:flex;gap:12px;margin-bottom:24px;">
-            <div style="flex:1;background:#43c863;color:white;text-align:center;padding:12px;border-radius:8px;font-weight:bold;font-size:1rem;cursor:pointer;">ฝาก</div>
-            <div style="flex:1;background:transparent;border:1px solid #374151;color:white;text-align:center;padding:12px;border-radius:8px;font-weight:bold;font-size:1rem;cursor:pointer;">ถอน</div>
-        </div>
-        <div style="display:flex;align-items:center;gap:10px;margin-bottom:16px;">
-            <div style="width:18px;height:18px;border:2px solid #374151;border-radius:4px;"></div>
-            <span style="color:#9CA3AF;font-size:0.9rem;">ซ่อนเหรียญที่มูลค่า &lt; 1 บาท</span>
-        </div>
-        <div style="background:#1a1f24;border-radius:8px;padding:12px 16px;color:#6B7280;font-size:0.95rem;margin-bottom:24px;border:1px solid #2d333b;">
-            🔍 ค้นหาสินทรัพย์
-        </div>
         <div style="display:flex;justify-content:space-between;align-items:center;padding:16px 0;border-bottom:1px solid #1f2937;">
             <div style="display:flex;align-items:center;gap:12px;">
                 <div style="background:#43c863;border-radius:50%;width:32px;height:32px;display:flex;align-items:center;justify-content:center;color:white;font-weight:bold;font-size:1.1rem;">฿</div>
