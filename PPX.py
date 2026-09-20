@@ -20,11 +20,12 @@ UI ถูกเรียกใต้ `if __name__ == "__main__"` เท่าน
 
 MODEL_VERSION / CHANGELOG
 -------------------------
-v1.5.27             + [FIX] ใช้ Radio Button ทำระบบนำทางแทน Tabs เพื่อแก้ปัญหาเด้งเปลี่ยนหน้า 100%
-                      ปรับ Native Columns ใน Tab 4 แทนตาราง HTML เดิมเพื่อแก้ปัญหาคลิกไม่ติด
+v1.5.28             + [UI] เปลี่ยนระบบนำทางกลับไปเป็น Tabs แบบเดิม (ลบ Radio buttons ออก) และใช้ JS Injection ที่ปรับปรุงใหม่ในการช่วยสลับหน้าจอ (วาร์ป) อัตโนมัติเวลาคลิกเหรียญใน Wallet
+v1.5.27             + [FIX] ปรับ Native Columns ใน Tab 4 แทนตาราง HTML เดิมเพื่อแก้ปัญหาคลิกไม่ติด
 v1.5.26             + [FIX] อัปเดตระบบ Logo เป็น Base64 SVG + Multi-layer Background
 v1.5.24             + [FEATURE] กดเหรียญใน Wallet Tab 4 แล้ววาร์ปไปหน้าเทรด (Exchange UI Simulator Tab 3)
 v1.5.23             + [UI] จัดระเบียบ Tab 4 (Wallet): ลบปุ่ม Header และวงเงินต่อวันออกให้ดูสะอาดขึ้น
+v1.5.20             + [FEATURE] เพิ่มระบบ "กระเป๋าเงิน" (Wallet Tab 4) สไตล์ Bitkub
 """
 
 from __future__ import annotations
@@ -45,7 +46,7 @@ from typing import Any, Mapping, Optional
 import numpy as np
 import pandas as pd
 
-MODEL_VERSION = "1.5.27"
+MODEL_VERSION = "1.5.28"
 
 try:
     import yaml
@@ -971,17 +972,9 @@ def coin_icon_html(sym: str, size: int = 28) -> str:
             f'background-image:{layers};background-size:cover;background-position:center;"></span>')
 
 
-NAV_LABELS = [
-    "📊 5-Year Backtest Simulator",
-    "🧮 Liquidity & Capital Planner",
-    "🛒 Exchange UI Simulator",
-    "💼 กระเป๋าเงิน (Wallet)",
-]
-NAV_EXCHANGE = NAV_LABELS[2]
-
 def _go_to_exchange(sym: str) -> None:
     st.session_state["bt_asset"] = sym
-    st.session_state["main_nav"] = NAV_EXCHANGE
+    st.session_state["force_tab_switch"] = 2
 
 
 # =========================================================================
@@ -1280,6 +1273,7 @@ THEME_CSS = """
     .mk-star { width: 36px; flex-shrink: 0; text-align: center; font-size: 1.15rem; color: #5e6673; }
     .mk-star.on { color: #fcd535; }
     .mk-asset { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; }
+    .mk-asset img { width: 26px; height: 26px; min-width: 26px; flex-shrink: 0; border-radius: 50%; background: #181a20; object-fit: contain; }
     .mk-asset > div { min-width: 0; }
     .mk-sym { font-weight: 700; color: #EAECEF; font-size: .9rem; line-height: 1.15; white-space: nowrap; }
     .mk-sym span { color: #848e9c; font-weight: 500; }
@@ -1502,6 +1496,10 @@ def render_tv_panel(asset: str) -> None:
         with g2:
             st.caption(f"🌐 ราคาโลก — `{global_sym}`")
             render_tradingview(global_sym, f"tv_cmp_global_{asset}", 420)
+
+def _go_to_exchange(sym: str) -> None:
+    st.session_state["bt_asset"] = sym
+    st.session_state["force_tab_switch"] = 2
 
 
 # =========================================================================
@@ -2045,7 +2043,7 @@ def render_tab1(cfg: dict[str, Any], data: pd.DataFrame, data_err: Optional[str]
                 mode='markers',
                 marker=dict(
                     size=5,
-                    color=list(range(len(df_3d))), # ไล่สีรุ้งตามเวลา
+                    color=list(range(len(df_3d))), 
                     colorscale='Rainbow',          
                     opacity=0.8,
                     line=dict(width=0)
@@ -2684,7 +2682,7 @@ def render_tab4(cfg: dict[str, Any], data: pd.DataFrame, market_df: pd.DataFrame
     total_usdt = total_thb / usdthb_current if usdthb_current > 0 else 0
     time_str = pd.Timestamp.now(tz="Asia/Bangkok").strftime("%H:%M:%S")
 
-    # Header (ไม่มีปุ่มฝาก/ถอน/ประวัติ ตามที่ร้องขอ)
+    # Header
     st.markdown(
         f'<div style="margin-bottom:20px;">'
         f'<h2 style="margin:0; color:#EAECEF; font-size:1.8rem;">กระเป๋าเงิน</h2>'
@@ -2724,7 +2722,7 @@ def render_tab4(cfg: dict[str, Any], data: pd.DataFrame, market_df: pd.DataFrame
         qty = cust_coins.get(sym, 0.0)
         price = price_thb_map.get(sym, 0.0)
         assets_to_show.append({"sym": sym, "qty": qty, "price": price, "val": qty * price})
-        
+
     WL = [2.2, 1.5, 1.5, 1.5, 1.3]
     with st.container(key="wl_table"):
         with st.container(key="wlhead"):
@@ -2734,17 +2732,21 @@ def render_tab4(cfg: dict[str, Any], data: pd.DataFrame, market_df: pd.DataFrame
             for col, txt, al in zip(hc, heads, aligns):
                 col.markdown(f'<div class="wl-h" style="text-align:{al}">{txt}</div>',
                              unsafe_allow_html=True)
+        
         for a in assets_to_show:
             sym = a["sym"]
             sub_name = COIN_NAMES.get(sym, "Thai Baht")
+            
             if hide_small and a["val"] < 1.0:
                 continue
             if search_q and search_q.lower() not in sym.lower() \
                     and search_q.lower() not in sub_name.lower():
                 continue
+                
             with st.container(key=f"wlrow_{sym}"):
                 c_ast, c_val, c_qty, c_pend, c_act = st.columns(
                     WL, vertical_alignment="center", gap="small")
+                
                 with c_ast:
                     c_ic, c_nm = st.columns([1, 6], vertical_alignment="center", gap="small")
                     c_ic.markdown(coin_icon_html(sym, 28), unsafe_allow_html=True)
@@ -2755,6 +2757,7 @@ def render_tab4(cfg: dict[str, Any], data: pd.DataFrame, market_df: pd.DataFrame
                         c_nm.button(f"{sym}  ·  {sub_name}", key=f"wlbtn_{sym}",
                                     type="tertiary", on_click=_go_to_exchange, args=(sym,),
                                     help=f"เปิดกราฟและหน้าเทรด {sym}")
+                
                 c_val.markdown(f'<div class="wl-cell">{a["val"]:,.2f}</div>', unsafe_allow_html=True)
                 c_qty.markdown(f'<div class="wl-cell">{a["qty"]:,.6f}</div>', unsafe_allow_html=True)
                 c_pend.markdown('<div class="wl-cell" style="color:#848e9c;">0.00</div>',
@@ -2783,21 +2786,20 @@ def main() -> None:
 
     market_df = fetch_market_overview(SUPPORTED_ASSETS)
 
-    if "main_nav" not in st.session_state:
-        st.session_state["main_nav"] = NAV_LABELS[0]
+    tab1, tab2, tab3, tab4 = st.tabs([
+        "📊 5-Year Backtest Simulator",
+        "🧮 Liquidity & Capital Planner",
+        "🛒 Exchange UI Simulator",
+        "💼 กระเป๋าเงิน (Wallet)",
+    ])
 
-    nav = st.radio("เมนูหลัก", NAV_LABELS, horizontal=True, key="main_nav",
-                   label_visibility="collapsed")
-
-    if nav == NAV_LABELS[0]:
+    with tab1:
         render_tab1(cfg, data, data_err)
-    elif nav == NAV_LABELS[1]:
+    with tab2:
         render_tab2(cfg, data, data_err)
-    elif nav == NAV_LABELS[2]:
-        render_tab3(cfg, data, data_err,
-                    price_lookup={row["symbol"]: row["price_usd"] for _, row in market_df.iterrows()} if not market_df.empty else {},
-                    market_df=market_df)
-    else:
+    with tab3:
+        render_tab3(cfg, data, data_err, price_lookup={row["symbol"]: row["price_usd"] for _, row in market_df.iterrows()} if not market_df.empty else {}, market_df=market_df)
+    with tab4:
         render_tab4(cfg, data, market_df=market_df)
 
     st.markdown(
@@ -2807,6 +2809,34 @@ def main() -> None:
         "ไม่ใช่เครื่องมือรับรอง compliance</div>",
         unsafe_allow_html=True,
     )
+
+    # -------------------------------------------------------------
+    # JS Injection: ระบบวาร์ปสลับแท็บจากการกดปุ่มในฝั่ง Python
+    # -------------------------------------------------------------
+    tab_idx = st.session_state.get("force_tab_switch")
+    if tab_idx is not None:
+        unique_id = uuid.uuid4().hex
+        js = f"""
+        <script>
+        // {unique_id}
+        (function () {{
+          var idx = {int(tab_idx)}, tries = 0;
+          function go() {{
+            var list = window.parent.document.querySelector('[data-baseweb="tab-list"]');
+            var tabs = list ? list.querySelectorAll('button[role="tab"]') : [];
+            if (tabs.length > idx) {{
+              if (tabs[idx].getAttribute('aria-selected') !== 'true') tabs[idx].click();
+            }} else if (tries++ < 30) {{
+              setTimeout(go, 100);
+            }}
+          }}
+          go();
+        }})();
+        </script>
+        """
+        components.html(js, height=0, width=0)
+        del st.session_state["force_tab_switch"]
+
 
 if __name__ == "__main__":
     if not HAS_UI:
