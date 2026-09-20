@@ -20,12 +20,11 @@ UI ถูกเรียกใต้ `if __name__ == "__main__"` เท่าน
 
 MODEL_VERSION / CHANGELOG
 -------------------------
+v1.5.21             + [FIX] แก้ไขบั๊ก Streamlit เรนเดอร์ HTML ออกมาเป็นตัวอักษรดิบ (Code Block) ใน Tab 4 อันเกิดจาก String Indentation
 v1.5.20             + [FEATURE] เพิ่มระบบ "กระเป๋าเงิน" (Wallet Tab 4) สไตล์ Bitkub แสดงยอดรวม THB/USDT, วงเงินรายวัน, และตารางสินทรัพย์ (ผูกตรรกะกับ Simulator อัตโนมัติ)
 v1.5.19             + [UI] ปรับกราฟ 3D ใน Tab 1 ให้เป็นจุด (Scatter) ไล่สีรุ้ง (Rainbow) แทนเส้น เพื่อความเท่และดูง่ายขึ้น
-v1.5.18             + [FEATURE] เพิ่มกราฟราคา 3D แบบ Interactive (3D Price vs Volatility vs Time) ใน Tab 1 สำหรับวิเคราะห์มิติความเคลื่อนไหวของราคา
-v1.5.17             + [FIX] แก้กราฟ TradingView ไม่เปลี่ยนตามเมื่อคลิกเหรียญ (ปรับ container_id ให้เป็น dynamic ตามชื่อเหรียญ) และเพิ่ม asset ใน signature
-v1.5.16             + [FIX] ปุ่มคลิกเลือกเหรียญในรายการตลาด (Market list) ไม่คลุมเต็มแถวจริง
-v1.5.15             + [FIX] กู้คืน UI รายการเหรียญกลับเป็นดีไซน์ Bitkub เดิม (ปุ่มใสวางทับ) และแก้ Logic หลังบ้านให้กราฟเปลี่ยนตามเมื่อคลิก
+v1.5.18             + [FEATURE] เพิ่มกราฟราคา 3D แบบ Interactive ใน Tab 1
+v1.5.17             + [FIX] แก้กราฟ TradingView ไม่เปลี่ยนตามเมื่อคลิกเหรียญ
 """
 
 from __future__ import annotations
@@ -45,7 +44,7 @@ from typing import Any, Mapping, Optional
 import numpy as np
 import pandas as pd
 
-MODEL_VERSION = "1.5.20"
+MODEL_VERSION = "1.5.21"
 
 try:
     import yaml
@@ -500,7 +499,7 @@ def sim_defaults(asset_name: str, start_date_val: Any, spot_usd: float,
         "orders": [],
         "current_date": start_date_val,
         "customer_coins": {},
-        "customer_thb": 1000000.0, # ให้เงินตั้งต้น 1,000,000 บาท ในกระเป๋าจำลอง
+        "customer_thb": 1000000.0, 
     }
 
 def sim_config_signature(ctx: Mapping[str, Any], target_stock_thb: float,
@@ -933,7 +932,6 @@ def execute_order(
     else:
         coins_book[current_asset] = max(0.0, coins_book.get(current_asset, 0.0) - coins)
 
-    # ตัดยอดเงินบาทลูกค้าในกระเป๋า (Wallet)
     sim["customer_thb"] = sim.get("customer_thb", 1000000.0)
     if side == "buy":
         sim["customer_thb"] -= amount_thb
@@ -1220,7 +1218,7 @@ THEME_CSS = """
     .oe-tab.active { color: #EAECEF; border-bottom: 2px solid #fcd535; padding-bottom: 6px; margin-bottom: -8px; }
     .oe-bal { display: flex; justify-content: space-between; font-size: 0.8rem; color: #848e9c; margin-bottom: 16px; }
 
-    /* ---------- Order buttons ---------- */
+    /* ---------- Order buttons (จับด้วย st-key-* แทน :contains) ---------- */
     .st-key-sim_send button { width: 100% !important; font-weight: 700; padding: 12px; color: #fff !important; border: none !important; }
     .st-key-sim_batch button { width: 100% !important; font-weight: 700; background: #fcd535 !important; color: #181a20 !important; border: none !important; }
 
@@ -2680,69 +2678,73 @@ def render_tab4(cfg: dict[str, Any], data: pd.DataFrame, market_df: pd.DataFrame
     time_str = pd.Timestamp.now(tz="Asia/Bangkok").strftime("%H:%M:%S")
 
     # Header
-    st.markdown(f"""
-    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:20px;">
-        <h2 style="margin:0; color:#EAECEF; font-size:1.8rem;">กระเป๋าเงิน</h2>
-        <div style="display:flex; gap:12px;">
-            <button class="wl-btn-solid">ฝาก</button>
-            <button class="wl-btn-out">ถอน</button>
-            <button class="wl-btn-out">ประวัติการทำรายการ</button>
-        </div>
-    </div>
-    """, unsafe_allow_html=True)
+    st.markdown(
+        f'<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:20px;">'
+        f'<h2 style="margin:0; color:#EAECEF; font-size:1.8rem;">กระเป๋าเงิน</h2>'
+        f'<div style="display:flex; gap:12px;">'
+        f'<button class="wl-btn-solid">ฝาก</button>'
+        f'<button class="wl-btn-out">ถอน</button>'
+        f'<button class="wl-btn-out">ประวัติการทำรายการ</button>'
+        f'</div>'
+        f'</div>',
+        unsafe_allow_html=True
+    )
 
     # Total Box
-    st.markdown(f"""
-    <div class="wl-box" style="margin-bottom:20px;">
-        <div style="font-size:0.9rem; color:#848e9c; font-weight:600;">มูลค่าทั้งหมด 👁️</div>
-        <div class="wl-total-val">{total_thb:,.2f} <span style="font-size:1.2rem; color:#848e9c;">THB</span></div>
-        <div style="font-size:0.9rem; color:#848e9c;">≈ {total_usdt:,.2f} USDT <span style="float:right; font-size:0.8rem;">อัปเดตล่าสุด: {time_str}</span></div>
-    </div>
-    """, unsafe_allow_html=True)
+    st.markdown(
+        f'<div class="wl-box" style="margin-bottom:20px;">'
+        f'<div style="font-size:0.9rem; color:#848e9c; font-weight:600;">มูลค่าทั้งหมด 👁️</div>'
+        f'<div class="wl-total-val">{total_thb:,.2f} <span style="font-size:1.2rem; color:#848e9c;">THB</span></div>'
+        f'<div style="font-size:0.9rem; color:#848e9c;">≈ {total_usdt:,.2f} USDT <span style="float:right; font-size:0.8rem;">อัปเดตล่าสุด: {time_str}</span></div>'
+        f'</div>',
+        unsafe_allow_html=True
+    )
 
     # Limits Box
-    st.markdown("""
-    <div style="margin-bottom: 24px;">
-        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
-            <div style="font-size:1.05rem; font-weight:700; color:#EAECEF;">วงเงินต่อวัน</div>
-            <button class="wl-btn-solid" style="padding:6px 12px; font-size:0.75rem;">เพิ่มวงเงินต่อวัน</button>
-        </div>
-        <div style="display:flex; gap:16px;">
-            <div class="wl-box" style="flex:1; padding:16px;">
-                <div class="wl-lim-title"><span style="color:#0ecb81;">💵</span> ฝากเงินบาท</div>
-                <div class="wl-lim-row"><span>วงเงินที่ใช้แล้ว (THB)</span><span>วงเงินการฝาก (THB)</span></div>
-                <div class="wl-lim-row"><span class="wl-lim-val">0.00</span><span class="wl-lim-val">4,000,000.00</span></div>
-                <div class="wl-lim-bar"><div class="wl-lim-fill" style="width:0%;"></div></div>
-            </div>
-            <div class="wl-box" style="flex:1; padding:16px;">
-                <div class="wl-lim-title"><span style="color:#0ecb81;">💵</span> ถอนเงินบาท</div>
-                <div class="wl-lim-row"><span>วงเงินที่ใช้แล้ว (THB)</span><span>วงเงินการถอน (THB)</span></div>
-                <div class="wl-lim-row"><span class="wl-lim-val">0.00</span><span class="wl-lim-val">4,000,000.00</span></div>
-                <div class="wl-lim-bar"><div class="wl-lim-fill" style="width:0%;"></div></div>
-            </div>
-            <div class="wl-box" style="flex:1; padding:16px;">
-                <div class="wl-lim-title"><span style="color:#0ecb81;">🪙</span> ฝากเหรียญ</div>
-                <div class="wl-lim-row"><span>วงเงินที่ใช้แล้ว (THB)</span><span>วงเงินการฝาก (THB)</span></div>
-                <div class="wl-lim-row"><span class="wl-lim-val">0.00</span><span class="wl-lim-val">4,000,000.00</span></div>
-                <div class="wl-lim-bar"><div class="wl-lim-fill" style="width:0%;"></div></div>
-            </div>
-            <div class="wl-box" style="flex:1; padding:16px;">
-                <div class="wl-lim-title"><span style="color:#0ecb81;">🚀</span> ถอนเหรียญ</div>
-                <div class="wl-lim-row"><span>วงเงินที่ใช้แล้ว (THB)</span><span>วงเงินการถอน (THB)</span></div>
-                <div class="wl-lim-row"><span class="wl-lim-val">0.00</span><span class="wl-lim-val">4,000,000.00</span></div>
-                <div class="wl-lim-bar"><div class="wl-lim-fill" style="width:0%;"></div></div>
-            </div>
-        </div>
-    </div>
-    """, unsafe_allow_html=True)
+    st.markdown(
+        '<div style="margin-bottom: 24px;">'
+        '<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">'
+        '<div style="font-size:1.05rem; font-weight:700; color:#EAECEF;">วงเงินต่อวัน</div>'
+        '<button class="wl-btn-solid" style="padding:6px 12px; font-size:0.75rem;">เพิ่มวงเงินต่อวัน</button>'
+        '</div>'
+        '<div style="display:flex; gap:16px;">'
+        '<div class="wl-box" style="flex:1; padding:16px;">'
+        '<div class="wl-lim-title"><span style="color:#0ecb81;">💵</span> ฝากเงินบาท</div>'
+        '<div class="wl-lim-row"><span>วงเงินที่ใช้แล้ว (THB)</span><span>วงเงินการฝาก (THB)</span></div>'
+        '<div class="wl-lim-row"><span class="wl-lim-val">0.00</span><span class="wl-lim-val">4,000,000.00</span></div>'
+        '<div class="wl-lim-bar"><div class="wl-lim-fill" style="width:0%;"></div></div>'
+        '</div>'
+        '<div class="wl-box" style="flex:1; padding:16px;">'
+        '<div class="wl-lim-title"><span style="color:#0ecb81;">💵</span> ถอนเงินบาท</div>'
+        '<div class="wl-lim-row"><span>วงเงินที่ใช้แล้ว (THB)</span><span>วงเงินการถอน (THB)</span></div>'
+        '<div class="wl-lim-row"><span class="wl-lim-val">0.00</span><span class="wl-lim-val">4,000,000.00</span></div>'
+        '<div class="wl-lim-bar"><div class="wl-lim-fill" style="width:0%;"></div></div>'
+        '</div>'
+        '<div class="wl-box" style="flex:1; padding:16px;">'
+        '<div class="wl-lim-title"><span style="color:#0ecb81;">🪙</span> ฝากเหรียญ</div>'
+        '<div class="wl-lim-row"><span>วงเงินที่ใช้แล้ว (THB)</span><span>วงเงินการฝาก (THB)</span></div>'
+        '<div class="wl-lim-row"><span class="wl-lim-val">0.00</span><span class="wl-lim-val">4,000,000.00</span></div>'
+        '<div class="wl-lim-bar"><div class="wl-lim-fill" style="width:0%;"></div></div>'
+        '</div>'
+        '<div class="wl-box" style="flex:1; padding:16px;">'
+        '<div class="wl-lim-title"><span style="color:#0ecb81;">🚀</span> ถอนเหรียญ</div>'
+        '<div class="wl-lim-row"><span>วงเงินที่ใช้แล้ว (THB)</span><span>วงเงินการถอน (THB)</span></div>'
+        '<div class="wl-lim-row"><span class="wl-lim-val">0.00</span><span class="wl-lim-val">4,000,000.00</span></div>'
+        '<div class="wl-lim-bar"><div class="wl-lim-fill" style="width:0%;"></div></div>'
+        '</div>'
+        '</div>'
+        '</div>',
+        unsafe_allow_html=True
+    )
 
     # Asset Table Title and Controls
-    st.markdown("""
-    <div style="display:flex; align-items:center; margin-bottom:16px; gap:8px;">
-        <div style="width:3px; height:16px; background:#0ecb81; border-radius:2px;"></div>
-        <div style="font-size:1.05rem; font-weight:700; color:#EAECEF;">สินทรัพย์</div>
-    </div>
-    """, unsafe_allow_html=True)
+    st.markdown(
+        '<div style="display:flex; align-items:center; margin-bottom:16px; gap:8px;">'
+        '<div style="width:3px; height:16px; background:#0ecb81; border-radius:2px;"></div>'
+        '<div style="font-size:1.05rem; font-weight:700; color:#EAECEF;">สินทรัพย์</div>'
+        '</div>',
+        unsafe_allow_html=True
+    )
 
     c_search, c_hide, c_pad = st.columns([2, 1.5, 6])
     with c_search:
@@ -2769,38 +2771,39 @@ def render_tab4(cfg: dict[str, Any], data: pd.DataFrame, market_df: pd.DataFrame
         logo = COIN_LOGOS.get(a["sym"], "https://cdn-icons-png.flaticon.com/512/197/197583.png") if a["sym"] != "THB" else "https://cdn-icons-png.flaticon.com/512/197/197583.png"
         sub_name = COIN_NAMES.get(a["sym"], "Thai Baht")
 
-        html_rows += f"""
-        <div class="wl-tbl-row">
-            <div class="wl-col-ast">
-                <img src="{logo}" style="width:28px; height:28px; border-radius:50%; background:#181a20; padding:2px;">
-                <div>
-                    <div style="line-height:1.2;">{a['sym']}</div>
-                    <div style="font-size:0.7rem; color:#848e9c; font-weight:500;">{sub_name}</div>
-                </div>
-            </div>
-            <div class="wl-col-val">{a['val']:,.2f}</div>
-            <div class="wl-col-val">{a['qty']:,.6f}</div>
-            <div class="wl-col-val" style="color:#848e9c;">0.00</div>
-            <div class="wl-col-act">
-                <span class="wl-act-link">ฝาก</span>
-                <span class="wl-act-link">ถอน</span>
-                <span class="wl-act-link" style="color:#848e9c;">•••</span>
-            </div>
-        </div>
-        """
+        html_rows += (
+            f'<div class="wl-tbl-row">'
+            f'<div class="wl-col-ast">'
+            f'<img src="{logo}" style="width:28px; height:28px; border-radius:50%; background:#181a20; padding:2px;">'
+            f'<div>'
+            f'<div style="line-height:1.2;">{a["sym"]}</div>'
+            f'<div style="font-size:0.7rem; color:#848e9c; font-weight:500;">{sub_name}</div>'
+            f'</div>'
+            f'</div>'
+            f'<div class="wl-col-val">{a["val"]:,.2f}</div>'
+            f'<div class="wl-col-val">{a["qty"]:,.6f}</div>'
+            f'<div class="wl-col-val" style="color:#848e9c;">0.00</div>'
+            f'<div class="wl-col-act">'
+            f'<span class="wl-act-link">ฝาก</span>'
+            f'<span class="wl-act-link">ถอน</span>'
+            f'<span class="wl-act-link" style="color:#848e9c;">•••</span>'
+            f'</div>'
+            f'</div>'
+        )
 
-    st.markdown(f"""
-    <div style="background:#181a20; border:1px solid #2b3139; border-radius:8px; overflow:hidden;">
-        <div class="wl-tbl-head">
-            <div style="flex:2;">สินทรัพย์ ↕</div>
-            <div style="flex:1.5; text-align:right;">มูลค่าทั้งหมด ↕</div>
-            <div style="flex:1.5; text-align:right;">จำนวนที่ใช้ได้ ↕</div>
-            <div style="flex:1.5; text-align:right;">รอดำเนินการ ↕</div>
-            <div style="flex:1.5;"></div>
-        </div>
-        {html_rows}
-    </div>
-    """, unsafe_allow_html=True)
+    st.markdown(
+        f'<div style="background:#181a20; border:1px solid #2b3139; border-radius:8px; overflow:hidden;">'
+        f'<div class="wl-tbl-head">'
+        f'<div style="flex:2;">สินทรัพย์ ↕</div>'
+        f'<div style="flex:1.5; text-align:right;">มูลค่าทั้งหมด ↕</div>'
+        f'<div style="flex:1.5; text-align:right;">จำนวนที่ใช้ได้ ↕</div>'
+        f'<div style="flex:1.5; text-align:right;">รอดำเนินการ ↕</div>'
+        f'<div style="flex:1.5;"></div>'
+        f'</div>'
+        f'{html_rows}'
+        f'</div>',
+        unsafe_allow_html=True
+    )
 
 
 def main() -> None:
