@@ -20,11 +20,23 @@ UI ถูกเรียกใต้ `if __name__ == "__main__"` เท่าน
 
 MODEL_VERSION / CHANGELOG
 -------------------------
-v1.5.15             + [FIX] กู้คืน UI รายการเหรียญกลับเป็นดีไซน์ Bitkub เดิม (ปุ่มใสวางทับ) และแก้ Logic หลังบ้านให้กราฟเปลี่ยนตามเมื่อคลิก (ลบ _fragment, อัปเดต ID กราฟ)
 v1.5.12             + ขยายพื้นที่คลิกของแถวเหรียญให้คลุมทั้งแถว (กว้าง+สูง 100%) คลิกตรงไหนก็เปลี่ยนเหรียญ/กราฟ/ข้อมูลทันที
+v1.5.11             + แก้ Vol ผิดหน่วย (yfinance Volume ของคริปโตเป็น USD อยู่แล้ว ไม่ต้องคูณราคาอีก)
 v1.5.10             + แก้ราคาซ้อนทับ (จัดราคา/% เป็นคอลัมน์ขวาซ้อน 2 บรรทัด, โลโก้ไม่ถูกบีบ) และแท็บ "ปริมาณ" แสดง Vol เป็นบาท
 v1.5.9              + แก้ดีไซน์รายการเหรียญ (Market) ให้เหมือน Bitkub: วาดทั้งแถวเป็น HTML
                       + ปุ่มดาว/ปุ่มเลือกเหรียญเป็นปุ่มโปร่งใสวางทับ โดยจับด้วย class `st-key-*`
+                        (เลิกใช้ :contains() ซึ่งไม่ใช่ CSS จริง และ data-testid เก่า)
+                      + แถวที่เลือกเป็นสีเขียวแบบ Bitkub, ย่อชื่อแท็บย่อยไม่ให้มีลูกศรเลื่อน
+                      + ปุ่มซื้อ/ขาย/สุ่มออเดอร์ ใช้ key + CSS แทน :contains()
+                      + Header ใช้ % เปลี่ยนแปลง 24H จริงจาก market overview (เดิม hardcode)
+                      * ต้องใช้ Streamlit >= 1.39 (class st-key-*)
+v1.5.8              + รื้อระบบคลิกเหรียญ ซ่อนปุ่มเลือก 100% ให้คลิกที่แถวได้เลยโดยไม่ Reload หน้าเว็บ
+                      + เพิ่มปุ่มรูปดาว (★/☆) ให้กดเพื่อเพิ่ม/ลดรายการโปรดได้จากหน้ารายการเหรียญโดยตรง
+                      + อัปเดต CSS แท็บเมนู (Tabs) ให้มีขีดเส้นใต้สีเขียวสไตล์ Exchange
+v1.5.5              + แก้ไข TypeError ตอนเรียก render_tab1 ในฟังก์ชัน main
+v1.5.4              + ทำระบบ "คลิกเหรียญแล้วกราฟเปลี่ยนตาม"
+v1.5.3              + ย้าย Market Overview มาไว้ด้านซ้าย และแก้ไข CDN รูปภาพเหรียญทั้งหมด
+v1.5.2              + ลบฟังก์ชัน Orderbook และเหรียญที่ไม่ได้รองรับโลโก้ออกเพื่อลดการประมวลผลเครื่อง
 """
 
 from __future__ import annotations
@@ -44,7 +56,7 @@ from typing import Any, Mapping, Optional
 import numpy as np
 import pandas as pd
 
-MODEL_VERSION = "1.5.15"
+MODEL_VERSION = "1.5.12"
 
 try:
     import yaml
@@ -504,7 +516,7 @@ def sim_defaults(asset_name: str, start_date_val: Any, spot_usd: float,
 def sim_config_signature(ctx: Mapping[str, Any], target_stock_thb: float,
                          start_date: Any, end_date: Any) -> tuple:
     keys = [
-        "asset", "local_premium", "spread", "hedge_fee",
+        "local_premium", "spread", "hedge_fee",
         "fx_limit", "slip_sens", "include_fee_rev",
         "wd_markup", "bank_type", "ktb_wd_fee", "ktb_fx_bps",
         "capital", "cex_margin", "cex_liquidity_thb", "liab",
@@ -1210,13 +1222,13 @@ THEME_CSS = """
     .oe-tab.active { color: #EAECEF; border-bottom: 2px solid #fcd535; padding-bottom: 6px; margin-bottom: -8px; }
     .oe-bal { display: flex; justify-content: space-between; font-size: 0.8rem; color: #848e9c; margin-bottom: 16px; }
 
-    /* ---------- Order buttons ---------- */
+    /* ---------- Order buttons (จับด้วย st-key-* แทน :contains) ---------- */
     .st-key-sim_send button { width: 100% !important; font-weight: 700; padding: 12px; color: #fff !important; border: none !important; }
     .st-key-sim_batch button { width: 100% !important; font-weight: 700; background: #fcd535 !important; color: #181a20 !important; border: none !important; }
 
     /* ---------- Market list (Bitkub style) ---------- */
     [class*="st-key-mkrow_"] {
-        position: relative !important;
+        position: relative;
         border-bottom: 1px solid #1f2329;
         cursor: pointer;
     }
@@ -1226,25 +1238,25 @@ THEME_CSS = """
     /* ปุ่มจริงถูกดึงออกจาก flow แล้วซ่อน วางทับแถว */
     [class*="st-key-fav_"], [class*="st-key-sel_"] {
         position: absolute !important;
-        top: 0 !important; bottom: 0 !important; margin: 0 !important; height: 100% !important;
+        top: 0; bottom: 0; margin: 0 !important;
     }
-    [class*="st-key-fav_"] { left: 0; width: 36px; z-index: 10; }
-    [class*="st-key-sel_"] { left: 36px; right: 0; z-index: 9; }
+    [class*="st-key-fav_"] { left: 0; width: 36px; z-index: 6; }
+    [class*="st-key-sel_"] { left: 36px; right: 0; z-index: 5; }
+    [class*="st-key-fav_"] button, [class*="st-key-sel_"] button {
+        width: 100% !important; height: 100% !important; min-height: 0 !important;
+        padding: 0 !important; opacity: 0 !important; cursor: pointer;
+    }
 
     /* ทำให้ overlay คลุมทั้งแถวจริง ๆ: กว้าง+สูง 100% ทุกชั้นของ wrapper ปุ่ม */
-    [class*="st-key-fav_"] *, [class*="st-key-sel_"] * {
+    [class*="st-key-fav_"] > div, [class*="st-key-sel_"] > div,
+    [class*="st-key-fav_"] .stButton, [class*="st-key-sel_"] .stButton,
+    [class*="st-key-fav_"] [data-testid="stButton"], [class*="st-key-sel_"] [data-testid="stButton"] {
         width: 100% !important; height: 100% !important; margin: 0 !important; padding: 0 !important;
     }
     [class*="st-key-fav_"] button, [class*="st-key-sel_"] button {
         display: block !important; border: none !important; background: transparent !important;
-        color: transparent !important; opacity: 0 !important; cursor: pointer !important;
     }
-    
-    /* บังคับไม่ให้ข้อความดักจับการคลิก */
-    [class*="st-key-mkrow_"] .mk-row, [class*="st-key-mkrow_"] .mk-row * { 
-        pointer-events: none !important; 
-    }
-
+    [class*="st-key-mkrow_"] .mk-row, [class*="st-key-mkrow_"] .mk-row * { pointer-events: none; }
     .mk-head, .mk-row { display: flex; align-items: center; }
     .mk-head { font-size: .72rem; color: #848e9c; padding: 6px 8px 6px 0; }
     .mk-row { padding: 8px 8px 8px 0; }
@@ -1446,19 +1458,19 @@ def render_tv_panel(asset: str) -> None:
     global_sym = TV_GLOBAL_SYMBOL.get(asset, f"BINANCE:{asset}USDT")
 
     if tv_mode == "กระดานไทย (Bitkub)":
-        render_tradingview(local_sym, f"tv_bt_local_{asset}", 520,
+        render_tradingview(local_sym, "tv_bt_local", 520,
                            studies=["RSI@tv-basicstudies"])
     elif tv_mode == "กระดานโลก (Binance)":
-        render_tradingview(global_sym, f"tv_bt_global_{asset}", 520,
+        render_tradingview(global_sym, "tv_bt_global", 520,
                            studies=["RSI@tv-basicstudies"])
     else:
         g1, g2 = st.columns(2)
         with g1:
             st.caption(f"🇹🇭 ราคาจริงฝั่งไทย — `{local_sym}`")
-            render_tradingview(local_sym, f"tv_cmp_local_{asset}", 420)
+            render_tradingview(local_sym, "tv_cmp_local", 420)
         with g2:
             st.caption(f"🌐 ราคาโลก — `{global_sym}`")
-            render_tradingview(global_sym, f"tv_cmp_global_{asset}", 420)
+            render_tradingview(global_sym, "tv_cmp_global", 420)
 
 def get_coin_logo(symbol: str) -> str:
     return COIN_LOGOS.get(symbol, "https://cdn-icons-png.flaticon.com/512/1490/1490844.png")
@@ -2311,9 +2323,9 @@ def render_market_column_view(df: pd.DataFrame, mode: str, current_asset: str, u
             st.markdown(html, unsafe_allow_html=True)
             st.button("fav", key=f"fav_{mode}_{sym}",
                       on_click=_toggle_fav, args=(sym,))
-            # นำ st.rerun() ออก ใช้แค่ on_click=_select_asset ซึ่ง Streamlit จะ rerun ให้อัตโนมัติอยู่แล้ว
-            st.button("select", key=f"sel_{mode}_{sym}",
-                      on_click=_select_asset, args=(sym,))
+            if st.button("select", key=f"sel_{mode}_{sym}",
+                         on_click=_select_asset, args=(sym,)):
+                st.rerun()   # full rerun เพื่อให้ sidebar/กราฟ/ข้อมูลเปลี่ยนตามเหรียญ
 
 
 def render_tab3(cfg: dict[str, Any], data: pd.DataFrame, data_err: Optional[str],
@@ -2451,7 +2463,7 @@ def render_tab3(cfg: dict[str, Any], data: pd.DataFrame, data_err: Optional[str]
     with col_center:
         st.markdown('<div class="ex-panel" style="padding:0; overflow:hidden; border:none; background:transparent;">', unsafe_allow_html=True)
         local_sym = TV_LOCAL_SYMBOL.get(asset, f"BITKUB:{asset}THB")
-        render_tradingview(local_sym, f"tv_center_{asset}", 460, studies=["MAExp@tv-basicstudies"])
+        render_tradingview(local_sym, "tv_center", 460, studies=["MAExp@tv-basicstudies"])
         st.markdown('</div>', unsafe_allow_html=True)
 
         st.markdown('<div style="margin-top:14px;"></div>', unsafe_allow_html=True)
