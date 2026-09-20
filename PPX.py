@@ -20,7 +20,8 @@ UI ถูกเรียกใต้ `if __name__ == "__main__"` เท่าน
 
 MODEL_VERSION / CHANGELOG
 -------------------------
-v1.5.27             + [FEATURE] ตรึงราคาในแผงออเดอร์ (15 วินาที) และใช้ st.fragment เพื่อรีเฟรชเฉพาะแผง
+v1.5.27             + [UI] ปรับ UI แผงเทรดให้ความสูงเท่ากันเป๊ะ (Alignment) ทั้งฝั่งซื้อและขาย
+                    + [FEATURE] ตรึงราคาในแผงออเดอร์ (15 วินาที) และใช้ st.fragment เพื่อรีเฟรชเฉพาะแผง
                     + [FEATURE] ระบบบันทึกรายการโปรด (Favorites) ลงไฟล์
                     + [FEATURE] ระบบสุ่มออเดอร์ข้ามหลายเหรียญพร้อมกัน (Multi-Asset Batch Run) แบบ Log-Uniform
                     + [FEATURE] เพิ่มระบบฝากเงินบาท (THB) แบบ Pop-up Dialog ในหน้า Wallet
@@ -1410,20 +1411,21 @@ THEME_CSS = """
     .op-tabs { display:flex; gap:28px; border-bottom:1px solid #2b3139; margin-bottom:14px; }
     .op-tab { font-size:1rem; font-weight:600; color:#848e9c; padding:8px 4px; }
     .op-tab.active { color:#EAECEF; border-bottom:2px solid #0ecb81; margin-bottom:-1px; }
-    .op-row { display:flex; justify-content:space-between; font-size:.85rem; color:#848e9c; margin-bottom:6px; }
+    .op-row { display:flex; justify-content:space-between; font-size:.85rem; color:#848e9c; margin-bottom:6px; min-height: 1.5rem; }
     .op-row b { color:#0ecb81; font-weight:600; font-variant-numeric:tabular-nums; }
     .op-row.mut b { color:#848e9c; font-weight:500; }
     .op-ro { display:flex; justify-content:space-between; align-items:center; background:#181a20;
              border:1px solid #2b3139; border-radius:6px; padding:12px 14px; margin:8px 0;
              font-size:.88rem; color:#b7bdc6; }
     .op-ro b { color:#EAECEF; font-variant-numeric:tabular-nums; }
-    .op-warn { color:#f6465d; font-size:.78rem; margin:2px 0 6px; }
+    .op-warn { color:#f6465d; font-size:.78rem; margin:2px 0 6px; min-height: 1.4rem; }
     .st-key-op_buy_btn button, .st-key-op_sell_btn button {
         width:100% !important; padding:12px !important; font-weight:700 !important;
         color:#fff !important; border:none !important; }
     .st-key-op_buy_btn button  { background:#0ecb81 !important; }
     .st-key-op_sell_btn button { background:#f6465d !important; }
     .st-key-op_buy_btn button:disabled, .st-key-op_sell_btn button:disabled { opacity:.35 !important; }
+    .st-key-op_buy_amt input, [class*="st-key-op_sell_qty_"] input { height: 2.6rem; }
     
     /* ปุ่ม ฝาก / ถอน / ••• ในตาราง Wallet */
     .wl-act { text-align:center; font-weight:600; font-size:.85rem; color:#0ecb81; }
@@ -2721,6 +2723,11 @@ def render_order_panel(cfg, sim, asset, mid_now, data, current_date_val, ctx) ->
                           key="op_type", label_visibility="collapsed")
     is_limit = order_type == "Limit"
 
+    snap = st.session_state.get("quote_snap")
+    if snap:
+        st.caption(f"ราคาอัปเดตทุก {QUOTE_REFRESH_SEC} วินาที · ล่าสุด "
+                   f"{pd.Timestamp.now(tz='Asia/Bangkok').strftime('%H:%M:%S')}")
+
     c_buy, c_sell = st.columns(2, gap="large")
 
     # ---------------- ฝั่งซื้อ ----------------
@@ -2734,11 +2741,6 @@ def render_order_panel(cfg, sim, asset, mid_now, data, current_date_val, ctx) ->
         st.pills("สัดส่วนของเงินบาท", PCTS, key="op_pct_buy",
                  label_visibility="collapsed", on_change=_apply_pct,
                  args=("op_pct_buy", "op_buy_amt", cash, "buy"))
-                 
-        snap = st.session_state.get("quote_snap")
-        if snap:
-            st.caption(f"ราคาอัปเดตทุก {QUOTE_REFRESH_SEC} วินาที · ล่าสุด "
-                       f"{pd.Timestamp.now(tz='Asia/Bangkok').strftime('%H:%M:%S')}")
 
         buy_px = quote_buy
         if is_limit:
@@ -2753,9 +2755,10 @@ def render_order_panel(cfg, sim, asset, mid_now, data, current_date_val, ctx) ->
             unsafe_allow_html=True)
             
         over_cash = buy_amt > cash + 1e-9
-        if over_cash:
-            st.markdown('<div class="op-warn">ยอดเงินบาทในกระเป๋าไม่พอ</div>',
-                        unsafe_allow_html=True)
+        st.markdown(
+            f'<div class="op-warn">{"ยอดเงินบาทในกระเป๋าไม่พอ" if over_cash else "&nbsp;"}</div>',
+            unsafe_allow_html=True)
+
         buy_clicked = st.button(f"ซื้อ (Buy) {asset}", key="op_buy_btn",
                                 disabled=(buy_amt <= 0 or over_cash), **WIDE)
 
@@ -2786,9 +2789,10 @@ def render_order_panel(cfg, sim, asset, mid_now, data, current_date_val, ctx) ->
             unsafe_allow_html=True)
             
         over_coin = sell_qty > coin_bal + 1e-9
-        if over_coin:
-            st.markdown(f'<div class="op-warn">{asset} ในกระเป๋าไม่พอ</div>',
-                        unsafe_allow_html=True)
+        st.markdown(
+            f'<div class="op-warn">{f"{asset} ในกระเป๋าไม่พอ" if over_coin else "&nbsp;"}</div>',
+            unsafe_allow_html=True)
+
         sell_clicked = st.button(f"ขาย (Sell) {asset}", key="op_sell_btn",
                                  disabled=(sell_qty <= 0 or over_coin), **WIDE)
 
