@@ -20,17 +20,11 @@ UI ถูกเรียกใต้ `if __name__ == "__main__"` เท่าน
 
 MODEL_VERSION / CHANGELOG
 -------------------------
-v1.5.14             + แก้บั๊กกดแถวเหรียญแล้วไม่มีอะไรเกิดขึ้น (ปรับ CSS Overlay ให้คลุมมิดชิดขึ้น บังคับ pointer-events: none และนำ st.rerun ออกจากปุ่ม)
-v1.5.13             + แก้ไขระบบคลิกเลือกเหรียญ Tab 3 (ลบ _fragment, ปรับ ID กราฟไม่ให้ซ้ำ, เพิ่ม asset ใน signature เพื่อล้างสถานะ Simulator)
-v1.5.11             + แก้ Vol ผิดหน่วย (yfinance Volume ของคริปโตเป็น USD อยู่แล้ว ไม่ต้องคูณราคาอีก)
+v1.5.15             + [FIX] กู้คืน UI รายการเหรียญกลับเป็นดีไซน์ Bitkub เดิม (ปุ่มใสวางทับ) และแก้ Logic หลังบ้านให้กราฟเปลี่ยนตามเมื่อคลิก (ลบ _fragment, อัปเดต ID กราฟ)
 v1.5.12             + ขยายพื้นที่คลิกของแถวเหรียญให้คลุมทั้งแถว (กว้าง+สูง 100%) คลิกตรงไหนก็เปลี่ยนเหรียญ/กราฟ/ข้อมูลทันที
 v1.5.10             + แก้ราคาซ้อนทับ (จัดราคา/% เป็นคอลัมน์ขวาซ้อน 2 บรรทัด, โลโก้ไม่ถูกบีบ) และแท็บ "ปริมาณ" แสดง Vol เป็นบาท
 v1.5.9              + แก้ดีไซน์รายการเหรียญ (Market) ให้เหมือน Bitkub: วาดทั้งแถวเป็น HTML
                       + ปุ่มดาว/ปุ่มเลือกเหรียญเป็นปุ่มโปร่งใสวางทับ โดยจับด้วย class `st-key-*`
-                      + แถวที่เลือกเป็นสีเขียวแบบ Bitkub, ย่อชื่อแท็บย่อยไม่ให้มีลูกศรเลื่อน
-                      + ปุ่มซื้อ/ขาย/สุ่มออเดอร์ ใช้ key + CSS แทน :contains()
-                      + Header ใช้ % เปลี่ยนแปลง 24H จริงจาก market overview (เดิม hardcode)
-v1.5.8              + รื้อระบบคลิกเหรียญ ซ่อนปุ่มเลือก 100% ให้คลิกที่แถวได้เลยโดยไม่ Reload หน้าเว็บ
 """
 
 from __future__ import annotations
@@ -50,7 +44,7 @@ from typing import Any, Mapping, Optional
 import numpy as np
 import pandas as pd
 
-MODEL_VERSION = "1.5.14"
+MODEL_VERSION = "1.5.15"
 
 try:
     import yaml
@@ -1216,7 +1210,7 @@ THEME_CSS = """
     .oe-tab.active { color: #EAECEF; border-bottom: 2px solid #fcd535; padding-bottom: 6px; margin-bottom: -8px; }
     .oe-bal { display: flex; justify-content: space-between; font-size: 0.8rem; color: #848e9c; margin-bottom: 16px; }
 
-    /* ---------- Order buttons (จับด้วย st-key-* แทน :contains) ---------- */
+    /* ---------- Order buttons ---------- */
     .st-key-sim_send button { width: 100% !important; font-weight: 700; padding: 12px; color: #fff !important; border: none !important; }
     .st-key-sim_batch button { width: 100% !important; font-weight: 700; background: #fcd535 !important; color: #181a20 !important; border: none !important; }
 
@@ -1712,7 +1706,7 @@ def build_sidebar() -> dict[str, Any]:
             hedge_fee_maker = st.number_input(
                 "ค่าธรรมเนียม Global CEX — Maker (%)", key="bt_hedge_fee_maker",
                 step=0.01,
-                help=("ค่าตั้งต้น = เท่า Taker จนกว่าจะตั้ง maker presetใน config.yaml "
+                help=("ค่าตั้งต้น = เท่า Taker จนกว่าจะตั้ง maker preset ใน config.yaml "
                       "หรือแก้ช่องนี้ตามเทียร์บัญชีจริง")) / 100
             maker_ratio = st.slider(
                 "สัดส่วน Hedge ที่ทำเป็น Maker / Limit (%)", 0, 100, 0,
@@ -2317,6 +2311,7 @@ def render_market_column_view(df: pd.DataFrame, mode: str, current_asset: str, u
             st.markdown(html, unsafe_allow_html=True)
             st.button("fav", key=f"fav_{mode}_{sym}",
                       on_click=_toggle_fav, args=(sym,))
+            # นำ st.rerun() ออก ใช้แค่ on_click=_select_asset ซึ่ง Streamlit จะ rerun ให้อัตโนมัติอยู่แล้ว
             st.button("select", key=f"sel_{mode}_{sym}",
                       on_click=_select_asset, args=(sym,))
 
