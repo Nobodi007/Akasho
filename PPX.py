@@ -20,15 +20,14 @@ UI ถูกเรียกใต้ `if __name__ == "__main__"` เท่าน
 
 MODEL_VERSION / CHANGELOG
 -------------------------
-v1.5.27             + [FEATURE] ระบบบันทึกรายการโปรด (Favorites) ลงไฟล์
+v1.5.27             + [FEATURE] ตรึงราคาในแผงออเดอร์ (15 วินาที) และใช้ st.fragment เพื่อรีเฟรชเฉพาะแผง
+                    + [FEATURE] ระบบบันทึกรายการโปรด (Favorites) ลงไฟล์
                     + [FEATURE] ระบบสุ่มออเดอร์ข้ามหลายเหรียญพร้อมกัน (Multi-Asset Batch Run) แบบ Log-Uniform
                     + [FEATURE] เพิ่มระบบฝากเงินบาท (THB) แบบ Pop-up Dialog ในหน้า Wallet
                     + [FIX] อัปเดตข้อมูลราคาวันปัจจุบัน, Limit Order แผงเทรด, และการสุ่มวันที่
                       ใช้ Radio Button ทำระบบนำทางแทน Tabs เพื่อแก้ปัญหาเด้งเปลี่ยนหน้า 100%
                       ปรับ Native Columns ใน Tab 4 แทนตาราง HTML เดิมเพื่อแก้ปัญหาคลิกไม่ติด
 v1.5.26             + [FIX] อัปเดตระบบ Logo เป็น Base64 SVG + Multi-layer Background
-v1.5.24             + [FEATURE] กดเหรียญใน Wallet Tab 4 แล้ววาร์ปไปหน้าเทรด (Exchange UI Simulator Tab 3)
-v1.5.23             + [UI] จัดระเบียบ Tab 4 (Wallet): ลบปุ่ม Header และวงเงินต่อวันออกให้ดูสะอาดขึ้น
 """
 
 from __future__ import annotations
@@ -39,6 +38,7 @@ import json
 import math
 import os
 import re
+import time
 import urllib.parse
 import urllib.request
 import uuid
@@ -2593,14 +2593,14 @@ def _submit_order(sim, side, amount_thb, data, order_date, ctx) -> None:
     steps, _rec = execute_order(sim, side, amount_thb, order_date,
                                 data.loc[order_date], ctx)
     st.session_state.sim_steps = steps
-    st.rerun()
+    st.rerun(scope="app")
 
 
 def _place_limit(side, amount_thb, qty, px) -> None:
     sim = st.session_state.sim
     sim.setdefault("open_orders", []).append(
         dict(id=uuid.uuid4().hex[:6], side=side, amount_thb=amount_thb, qty=qty, px=px))
-    st.rerun()
+    st.rerun(scope="app")
 
 
 def _cancel_limit(oid: str) -> None:
@@ -2696,6 +2696,19 @@ def run_random_batch(sim, cfg, ctx, target_stock_thb, coins, n_orders, seed,
     return last_steps, counts, skipped
 
 
+QUOTE_REFRESH_SEC = 15   # ปรับตรงนี้ได้ เช่น 10 / 30
+
+def _frozen_mid(asset: str, mid_now: float) -> float:
+    """คืนราคากลางที่ตรึงไว้ จะอัปเดตเมื่อครบ QUOTE_REFRESH_SEC วินาที หรือเปลี่ยนเหรียญ"""
+    snap = st.session_state.get("quote_snap")
+    now = time.time()
+    if (not snap or snap["asset"] != asset
+            or now - snap["ts"] >= QUOTE_REFRESH_SEC):
+        snap = {"asset": asset, "mid": float(mid_now), "ts": now}
+        st.session_state["quote_snap"] = snap
+    return float(snap["mid"])
+
+
 def render_order_panel(cfg, sim, asset, mid_now, data, current_date_val, ctx) -> None:
     fee = LOCAL_TRADING_FEE_PCT
     quote_buy = mid_now * (1 + cfg["dealer_spread"])
@@ -2721,6 +2734,11 @@ def render_order_panel(cfg, sim, asset, mid_now, data, current_date_val, ctx) ->
         st.pills("สัดส่วนของเงินบาท", PCTS, key="op_pct_buy",
                  label_visibility="collapsed", on_change=_apply_pct,
                  args=("op_pct_buy", "op_buy_amt", cash, "buy"))
+                 
+        snap = st.session_state.get("quote_snap")
+        if snap:
+            st.caption(f"ราคาอัปเดตทุก {QUOTE_REFRESH_SEC} วินาที · ล่าสุด "
+                       f"{pd.Timestamp.now(tz='Asia/Bangkok').strftime('%H:%M:%S')}")
 
         buy_px = quote_buy
         if is_limit:
@@ -2792,6 +2810,16 @@ def render_order_panel(cfg, sim, asset, mid_now, data, current_date_val, ctx) ->
                    f"{o['amount_thb']:,.2f} THB" if o["side"] == "buy"
                    else f"SELL @ {o['px']:,.4f} — {o['qty']:.8f} {asset}")
         c2.button("Cancel", key=f"cx_{o['id']}", on_click=_cancel_limit, args=(o["id"],))
+
+
+def _order_panel_live_body(cfg, sim, asset, mid_now, data, current_date_val, ctx):
+    render_order_panel(cfg, sim, asset, _frozen_mid(asset, mid_now),
+                       data, current_date_val, ctx)
+
+if HAS_FRAGMENT:
+    _order_panel_live = st.fragment(run_every=QUOTE_REFRESH_SEC)(_order_panel_live_body)
+else:
+    _order_panel_live = _order_panel_live_body
 
 
 def render_tab3(cfg: dict[str, Any], data: pd.DataFrame, data_err: Optional[str],
@@ -2915,7 +2943,7 @@ def render_tab3(cfg: dict[str, Any], data: pd.DataFrame, data_err: Optional[str]
                            studies=["MAExp@tv-basicstudies"])
 
         with st.container(border=True):
-            render_order_panel(cfg, sim, asset, mid_now, data, current_date_val, ctx)
+            _order_panel_live(cfg, sim, asset, mid_now, data, current_date_val, ctx)
 
         with st.expander("🎲 เครื่องมือจำลอง — สุ่มออเดอร์ / รีเซ็ต", expanded=False):
             st.caption("สุ่มออเดอร์ = ลูกค้าคนอื่นในตลาด ไม่แตะกระเป๋าของคุณ · "
