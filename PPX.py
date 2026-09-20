@@ -2680,66 +2680,57 @@ def render_tab3(cfg: dict[str, Any], data: pd.DataFrame, data_err: Optional[str]
         }
         default_logo = "https://cdn-icons-png.flaticon.com/512/1490/1490844.png"
 
-        coin_rows_html = ""
+        coin_rows = []
         for sym, qty in sorted(coins_book.items(), key=lambda kv: -kv[1] * wallet_price.get(kv[0], 0.0)):
             if qty <= 0: continue
-            
             val_thb = qty * wallet_price.get(sym, 0.0) * usdthb_current
             c_info = coin_info.get(sym, {"name": sym, "logo": default_logo})
-            
-            coin_rows_html += f"""
-            <div style="display:flex;justify-content:space-between;align-items:center;padding:16px 0;border-bottom:1px solid #282f3b;">
-                <div style="display:flex;align-items:center;gap:16px;">
-                    <img src="{c_info['logo']}" style="width:34px;height:34px;border-radius:50%;object-fit:contain;background:white;padding:2px;">
-                    <div>
-                        <div style="color:#FAFAFA;font-weight:bold;font-size:1.05rem;line-height:1.2;">{sym}</div>
-                        <div style="color:#9CA3AF;font-size:0.8rem;margin-top:2px;">{c_info['name']}</div>
-                    </div>
-                </div>
-                <div style="text-align:right;">
-                    <div style="color:#FAFAFA;font-weight:bold;font-size:1.05rem;line-height:1.2;">{fmt_coin(qty, "").strip()} <span style="color:#6B7280;font-size:0.9rem;">&gt;</span></div>
-                    <div style="color:#9CA3AF;font-size:0.8rem;margin-top:2px;">{fmt_num(val_thb)} THB</div>
-                </div>
-            </div>"""
+            row_html = (
+                '<div style="display:flex;justify-content:space-between;align-items:center;padding:16px 0;border-bottom:1px solid #282f3b;">'
+                '<div style="display:flex;align-items:center;gap:16px;">'
+                f'<img src="{c_info["logo"]}" style="width:34px;height:34px;border-radius:50%;object-fit:contain;background:white;padding:2px;">'
+                '<div>'
+                f'<div style="color:#FAFAFA;font-weight:bold;font-size:1.05rem;line-height:1.2;">{sym}</div>'
+                f'<div style="color:#9CA3AF;font-size:0.8rem;margin-top:2px;">{c_info["name"]}</div>'
+                '</div></div>'
+                '<div style="text-align:right;">'
+                f'<div style="color:#FAFAFA;font-weight:bold;font-size:1.05rem;line-height:1.2;">{fmt_coin(qty, "").strip()} <span style="color:#6B7280;font-size:0.9rem;">&gt;</span></div>'
+                f'<div style="color:#9CA3AF;font-size:0.8rem;margin-top:2px;">{fmt_num(val_thb)} THB</div>'
+                '</div></div>'
+            )
+            coin_rows.append(row_html)
 
-        if not coin_rows_html:
-            coin_rows_html = ('<div style="padding:24px 0;color:#6B7280;text-align:center;font-size:0.9rem;">ยังไม่มีสินทรัพย์ในพอร์ต</div>')
+        if not coin_rows:
+            coin_rows.append('<div style="padding:24px 0;color:#6B7280;text-align:center;font-size:0.9rem;">ยังไม่มีสินทรัพย์ในพอร์ต</div>')
 
-        html_ui = f"""
-<div style="background:#161b22;border-radius:12px;overflow:hidden;margin-bottom:20px;border:1px solid #30363d;font-family:sans-serif;">
-    <div style="background:#1e3a29;padding:14px 20px;border-bottom:1px solid #30363d;">
-        <div style="display:flex;justify-content:space-between;align-items:center;color:#e6edf3;">
-            <span style="font-size:1.1rem;font-weight:bold;">กระเป๋าเงิน (Simulated)</span>
-            <span style="font-size:1.1rem;color:#8b949e;">ⓘ 🕒</span>
-        </div>
-    </div>
-    
-    <div style="padding:28px 20px;text-align:center;border-bottom:1px solid #30363d;background:#1a2027;">
-        <div style="color:#8b949e;font-size:0.85rem;margin-bottom:10px;">มูลค่าทั้งหมด</div>
-        <div style="color:#2ea043;font-size:2.4rem;font-weight:800;line-height:1;">{fmt_num(port_val_thb)} THB</div>
-        <div style="color:#8b949e;font-size:0.85rem;margin-top:10px;">(≈ {fmt_num(port_val_usdt)} USDT)</div>
-        <div style="color:#6e7681;font-size:0.75rem;margin-top:20px;">↻ อัปเดตล่าสุด: {update_time}</div>
-    </div>
-    
-    <div style="padding:0 20px 10px 20px;background:#161b22;">
-        <div style="display:flex;justify-content:space-between;align-items:center;padding:16px 0;border-bottom:1px solid #282f3b;">
-            <div style="display:flex;align-items:center;gap:16px;">
-                <img src="{coin_info['THB']['logo']}" style="width:34px;height:34px;border-radius:50%;object-fit:cover;border:1px solid #30363d;">
-                <div>
-                    <div style="color:#FAFAFA;font-weight:bold;font-size:1.05rem;line-height:1.2;">THB</div>
-                    <div style="color:#9CA3AF;font-size:0.8rem;margin-top:2px;">Thai Baht</div>
-                </div>
-            </div>
-            <div style="text-align:right;">
-                <div style="color:#FAFAFA;font-weight:bold;font-size:1.05rem;line-height:1.2;">0.00 <span style="color:#6B7280;font-size:0.9rem;">&gt;</span></div>
-                <div style="color:#9CA3AF;font-size:0.8rem;margin-top:2px;">0 THB</div>
-            </div>
-        </div>
-        
-        {coin_rows_html}
-    </div>
-</div>
-        """
+        coin_rows_html = "".join(coin_rows)
+
+        html_ui = (
+            '<div style="background:#161b22;border-radius:12px;overflow:hidden;margin-bottom:20px;border:1px solid #30363d;font-family:sans-serif;">'
+            '<div style="background:#1e3a29;padding:14px 20px;border-bottom:1px solid #30363d;">'
+            '<div style="display:flex;justify-content:space-between;align-items:center;color:#e6edf3;">'
+            '<span style="font-size:1.1rem;font-weight:bold;">กระเป๋าเงิน (Simulated)</span>'
+            '<span style="font-size:1.1rem;color:#8b949e;">ⓘ 🕒</span>'
+            '</div></div>'
+            '<div style="padding:28px 20px;text-align:center;border-bottom:1px solid #30363d;background:#1a2027;">'
+            '<div style="color:#8b949e;font-size:0.85rem;margin-bottom:10px;">มูลค่าทั้งหมด</div>'
+            f'<div style="color:#2ea043;font-size:2.4rem;font-weight:800;line-height:1;">{fmt_num(port_val_thb)} THB</div>'
+            f'<div style="color:#8b949e;font-size:0.85rem;margin-top:10px;">(≈ {fmt_num(port_val_usdt)} USDT)</div>'
+            f'<div style="color:#6e7681;font-size:0.75rem;margin-top:20px;">↻ อัปเดตล่าสุด: {update_time}</div>'
+            '</div>'
+            '<div style="padding:0 20px 10px 20px;background:#161b22;">'
+            '<div style="display:flex;justify-content:space-between;align-items:center;padding:16px 0;border-bottom:1px solid #282f3b;">'
+            '<div style="display:flex;align-items:center;gap:16px;">'
+            f'<img src="{coin_info["THB"]["logo"]}" style="width:34px;height:34px;border-radius:50%;object-fit:cover;border:1px solid #30363d;">'
+            '<div><div style="color:#FAFAFA;font-weight:bold;font-size:1.05rem;line-height:1.2;">THB</div>'
+            '<div style="color:#9CA3AF;font-size:0.8rem;margin-top:2px;">Thai Baht</div></div></div>'
+            '<div style="text-align:right;">'
+            '<div style="color:#FAFAFA;font-weight:bold;font-size:1.05rem;line-height:1.2;">0.00 <span style="color:#6B7280;font-size:0.9rem;">&gt;</span></div>'
+            '<div style="color:#9CA3AF;font-size:0.8rem;margin-top:2px;">0 THB</div>'
+            '</div></div>'
+            + coin_rows_html +
+            '</div></div>'
+        )
 
         st.markdown(html_ui, unsafe_allow_html=True)
 
