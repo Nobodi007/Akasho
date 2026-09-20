@@ -1705,7 +1705,7 @@ def build_sidebar() -> dict[str, Any]:
             maker_ratio = st.slider(
                 "สัดส่วน Hedge ที่ทำเป็น Maker / Limit (%)", 0, 100, 0,
                 key="bt_maker_ratio",
-                help=("0 = hedge แบบ Taker ทั้งหมด (โมเดลเดิม) · ยังไม่จำลองความเสี่ยง"
+                help=("0 = hedgeแบบ Taker ทั้งหมด (โมเดลเดิม) · ยังไม่จำลองความเสี่ยง"
                       "ที่ Limit order ไม่ถูก fill จึงยิ่งสูงยิ่งมองโลกในแง่ดี")) / 100
             
             hedge_fee = blend_hedge_fee(hedge_fee_taker, hedge_fee_maker, maker_ratio)
@@ -2663,62 +2663,79 @@ def render_tab3(cfg: dict[str, Any], data: pd.DataFrame, data_err: Optional[str]
 
         update_time = pd.Timestamp.now().strftime("%H:%M:%S")
 
+        coin_info = {
+            "BTC": {"name": "Bitcoin", "logo": "https://cryptologos.cc/logos/bitcoin-btc-logo.png"},
+            "ETH": {"name": "Ethereum", "logo": "https://cryptologos.cc/logos/ethereum-eth-logo.png"},
+            "USDT": {"name": "Tether", "logo": "https://cryptologos.cc/logos/tether-usdt-logo.png"},
+            "SOL": {"name": "Solana", "logo": "https://cryptologos.cc/logos/solana-sol-logo.png"},
+            "DOGE": {"name": "Dogecoin", "logo": "https://cryptologos.cc/logos/dogecoin-doge-logo.png"},
+            "ADA": {"name": "Cardano", "logo": "https://cryptologos.cc/logos/cardano-ada-logo.png"},
+            "HBAR": {"name": "Hedera", "logo": "https://cryptologos.cc/logos/hedera-hbar-logo.png"},
+            "LINK": {"name": "Chainlink", "logo": "https://cryptologos.cc/logos/chainlink-link-logo.png"},
+            "XLM": {"name": "Stellar", "logo": "https://cryptologos.cc/logos/stellar-xlm-logo.png"},
+            "XRP": {"name": "XRP", "logo": "https://cryptologos.cc/logos/xrp-xrp-logo.png"},
+            "USDC": {"name": "USD Coin", "logo": "https://cryptologos.cc/logos/usd-coin-usdc-logo.png"},
+            "PEPE": {"name": "Pepe", "logo": "https://cryptologos.cc/logos/pepe-pepe-logo.png"},
+            "THB": {"name": "Thai Baht", "logo": "https://cdn-icons-png.flaticon.com/512/197/197583.png"},
+        }
+        default_logo = "https://cdn-icons-png.flaticon.com/512/1490/1490844.png"
+
         coin_rows_html = ""
         for sym, qty in sorted(coins_book.items(), key=lambda kv: -kv[1] * wallet_price.get(kv[0], 0.0)):
             if qty <= 0: continue
             
             val_thb = qty * wallet_price.get(sym, 0.0) * usdthb_current
-            icon_letter = sym[0]
+            c_info = coin_info.get(sym, {"name": sym, "logo": default_logo})
             
-            colors = ["#2563EB", "#DC2626", "#D97706", "#059669", "#7C3AED", "#DB2777", "#0891B2"]
-            bg_color = colors[sum(ord(c) for c in sym) % len(colors)]
-            
-            coin_rows_html += f"""<div style="display:flex;justify-content:space-between;align-items:center;padding:16px 0;border-bottom:1px solid #1f2937;">
-<div style="display:flex;align-items:center;gap:12px;">
-<div style="background:{bg_color};border-radius:50%;width:32px;height:32px;display:flex;align-items:center;justify-content:center;color:white;font-weight:bold;font-size:1.1rem;">{icon_letter}</div>
-<div>
-<div style="color:white;font-weight:bold;font-size:1.1rem;">{sym}</div>
-<div style="color:#6B7280;font-size:0.85rem;margin-top:2px;">จำนวนที่ใช้ได้</div>
-</div>
-</div>
-<div style="text-align:right;">
-<div style="color:white;font-weight:bold;font-size:1.1rem;">{fmt_coin(qty, "").strip()} <span style="color:#6B7280;">&gt;</span></div>
-<div style="color:#6B7280;font-size:0.85rem;margin-top:2px;">{fmt_num(val_thb)} THB</div>
-</div>
-</div>"""
+            coin_rows_html += f"""
+            <div style="display:flex;justify-content:space-between;align-items:center;padding:16px 0;border-bottom:1px solid #282f3b;">
+                <div style="display:flex;align-items:center;gap:16px;">
+                    <img src="{c_info['logo']}" style="width:34px;height:34px;border-radius:50%;object-fit:contain;background:white;padding:2px;">
+                    <div>
+                        <div style="color:#FAFAFA;font-weight:bold;font-size:1.05rem;line-height:1.2;">{sym}</div>
+                        <div style="color:#9CA3AF;font-size:0.8rem;margin-top:2px;">{c_info['name']}</div>
+                    </div>
+                </div>
+                <div style="text-align:right;">
+                    <div style="color:#FAFAFA;font-weight:bold;font-size:1.05rem;line-height:1.2;">{fmt_coin(qty, "").strip()} <span style="color:#6B7280;font-size:0.9rem;">&gt;</span></div>
+                    <div style="color:#9CA3AF;font-size:0.8rem;margin-top:2px;">{fmt_num(val_thb)} THB</div>
+                </div>
+            </div>"""
 
         if not coin_rows_html:
-            coin_rows_html = ('<div style="padding:16px 0;color:#6B7280;'
-                              'text-align:center;">ยังไม่มีเหรียญในพอร์ต</div>')
+            coin_rows_html = ('<div style="padding:24px 0;color:#6B7280;text-align:center;font-size:0.9rem;">ยังไม่มีสินทรัพย์ในพอร์ต</div>')
 
         html_ui = f"""
-<div style="background:#111518;border-radius:16px;overflow:hidden;margin-bottom:20px;border:1px solid #1f2937;font-family:sans-serif;">
-    <div style="background:linear-gradient(180deg,#206c45 0%,#173d2a 100%);padding:20px 20px 40px 20px;position:relative;">
-        <div style="display:flex;justify-content:space-between;align-items:center;color:white;">
-            <span style="font-size:1.3rem;font-weight:bold;">กระเป๋าเงิน (Simulated)</span>
-            <span style="font-size:1.2rem;">ⓘ 🕒</span>
+<div style="background:#161b22;border-radius:12px;overflow:hidden;margin-bottom:20px;border:1px solid #30363d;font-family:sans-serif;">
+    <div style="background:#1e3a29;padding:14px 20px;border-bottom:1px solid #30363d;">
+        <div style="display:flex;justify-content:space-between;align-items:center;color:#e6edf3;">
+            <span style="font-size:1.1rem;font-weight:bold;">กระเป๋าเงิน (Simulated)</span>
+            <span style="font-size:1.1rem;color:#8b949e;">ⓘ 🕒</span>
         </div>
     </div>
-    <div style="margin:-30px 20px 20px 20px;background:#1c2127;border-radius:12px;padding:24px 20px;text-align:center;position:relative;box-shadow:0 4px 12px rgba(0,0,0,0.5);">
-        <div style="color:#9CA3AF;font-size:0.9rem;margin-bottom:8px;">มูลค่าทั้งหมด</div>
-        <div style="color:#00D26A;font-size:2.2rem;font-weight:bold;">{fmt_num(port_val_thb)} THB</div>
-        <div style="color:#9CA3AF;font-size:0.9rem;margin-top:4px;">(≈ {fmt_num(port_val_usdt)} USDT)</div>
-        <div style="color:#6B7280;font-size:0.8rem;margin-top:16px;">↻ อัปเดตล่าสุด: {update_time}</div>
+    
+    <div style="padding:28px 20px;text-align:center;border-bottom:1px solid #30363d;background:#1a2027;">
+        <div style="color:#8b949e;font-size:0.85rem;margin-bottom:10px;">มูลค่าทั้งหมด</div>
+        <div style="color:#2ea043;font-size:2.4rem;font-weight:800;line-height:1;">{fmt_num(port_val_thb)} THB</div>
+        <div style="color:#8b949e;font-size:0.85rem;margin-top:10px;">(≈ {fmt_num(port_val_usdt)} USDT)</div>
+        <div style="color:#6e7681;font-size:0.75rem;margin-top:20px;">↻ อัปเดตล่าสุด: {update_time}</div>
     </div>
-    <div style="padding:0 20px;">
-        <div style="display:flex;justify-content:space-between;align-items:center;padding:16px 0;border-bottom:1px solid #1f2937;">
-            <div style="display:flex;align-items:center;gap:12px;">
-                <div style="background:#43c863;border-radius:50%;width:32px;height:32px;display:flex;align-items:center;justify-content:center;color:white;font-weight:bold;font-size:1.1rem;">฿</div>
+    
+    <div style="padding:0 20px 10px 20px;background:#161b22;">
+        <div style="display:flex;justify-content:space-between;align-items:center;padding:16px 0;border-bottom:1px solid #282f3b;">
+            <div style="display:flex;align-items:center;gap:16px;">
+                <img src="{coin_info['THB']['logo']}" style="width:34px;height:34px;border-radius:50%;object-fit:cover;border:1px solid #30363d;">
                 <div>
-                    <div style="color:white;font-weight:bold;font-size:1.1rem;">THB</div>
-                    <div style="color:#6B7280;font-size:0.85rem;margin-top:2px;">จำนวนที่ใช้ได้</div>
+                    <div style="color:#FAFAFA;font-weight:bold;font-size:1.05rem;line-height:1.2;">THB</div>
+                    <div style="color:#9CA3AF;font-size:0.8rem;margin-top:2px;">Thai Baht</div>
                 </div>
             </div>
             <div style="text-align:right;">
-                <div style="color:white;font-weight:bold;font-size:1.1rem;">0.00 <span style="color:#6B7280;">&gt;</span></div>
-                <div style="color:#6B7280;font-size:0.85rem;margin-top:2px;">0 THB</div>
+                <div style="color:#FAFAFA;font-weight:bold;font-size:1.05rem;line-height:1.2;">0.00 <span style="color:#6B7280;font-size:0.9rem;">&gt;</span></div>
+                <div style="color:#9CA3AF;font-size:0.8rem;margin-top:2px;">0 THB</div>
             </div>
         </div>
+        
         {coin_rows_html}
     </div>
 </div>
