@@ -45,7 +45,7 @@ from typing import Any, Mapping, Optional
 import numpy as np
 import pandas as pd
 
-MODEL_VERSION = "1.5.27"
+MODEL_VERSION = "1.5.26"
 
 try:
     import yaml
@@ -571,7 +571,7 @@ def sim_normalize_state(sim: Any, asset: str, start_date_val: Any,
 
 def execute_order(
     sim: dict[str, Any], side: str, amount_thb: float, order_date: pd.Timestamp,
-    px_row: pd.Series, ctx: Mapping[str, Any],
+    px_row: pd.Series, ctx: Mapping[str, Any], affect_wallet: bool = True,
 ) -> tuple[list[dict[str, Any]], Optional[dict[str, Any]]]:
     p = ctx
     side = "buy" if side == "buy" else "sell"
@@ -620,7 +620,10 @@ def execute_order(
 
     trading_fee = amount_thb * LOCAL_TRADING_FEE_PCT
     settlement_thb = max(0.0, amount_thb - trading_fee)
-    coins = settlement_thb / quote
+    # Buy : ค่าธรรมเนียมหักจากเงินที่จ่าย -> ได้เหรียญจาก settlement
+    # Sell: amount_thb = มูลค่าเหรียญที่ขาย (gross) -> ส่งมอบเหรียญเต็มจำนวน
+    #       แล้วได้เงินหลังหักค่าธรรมเนียม
+    coins = (amount_thb if side == "sell" else settlement_thb) / quote
 
     if coins <= 0:
         steps.append(dict(n=2, t="จับคู่และส่งมอบ", s="block",
@@ -652,7 +655,7 @@ def execute_order(
                      "- " + fmt_baht(trading_fee)),
                     ("เหรียญที่ต้องส่งมอบ", fmt_coin(coins, current_asset)),
                     ("สต็อกก่อน", fmt_coin(inv_before, current_asset)),
-                    ("FX quota เหลือ", f"$ {fx_left_usd:,.0f}"),
+                    ("FX quotaเหลือ", f"$ {fx_left_usd:,.0f}"),
                     ("สูงสุดที่ hedge ได้ด้วย FX",
                      fmt_coin(feasible_hedge_coins, current_asset)),
                 ],
@@ -922,11 +925,15 @@ def execute_order(
     else:
         gate_result = "NC ไม่พอ"
 
-    coins_book = sim.setdefault("customer_coins", {})
-    if side == "buy":
-        coins_book[current_asset] = coins_book.get(current_asset, 0.0) + coins
-    else:
-        coins_book[current_asset] = max(0.0, coins_book.get(current_asset, 0.0) - coins)
+    if affect_wallet:
+        coins_book = sim.setdefault("customer_coins", {})
+        cash_now = float(sim.get("customer_thb", 1000000.0))
+        if side == "buy":
+            coins_book[current_asset] = coins_book.get(current_asset, 0.0) + coins
+            sim["customer_thb"] = cash_now - amount_thb
+        else:
+            coins_book[current_asset] = max(0.0, coins_book.get(current_asset, 0.0) - coins)
+            sim["customer_thb"] = cash_now + settlement_thb
 
     record = {
         "วันที่": order_date.strftime("%Y-%m-%d"),
@@ -1239,10 +1246,6 @@ THEME_CSS = """
     .oe-tab.active { color: #EAECEF; border-bottom: 2px solid #fcd535; padding-bottom: 6px; margin-bottom: -8px; }
     .oe-bal { display: flex; justify-content: space-between; font-size: 0.8rem; color: #848e9c; margin-bottom: 16px; }
 
-    /* ---------- Order buttons ---------- */
-    .st-key-sim_send button { width: 100% !important; font-weight: 700; padding: 12px; color: #fff !important; border: none !important; }
-    .st-key-sim_batch button { width: 100% !important; font-weight: 700; background: #fcd535 !important; color: #181a20 !important; border: none !important; }
-
     /* ---------- Market list (Bitkub style) ---------- */
     [class*="st-key-mkrow_"] {
         position: relative !important;
@@ -1327,7 +1330,7 @@ THEME_CSS = """
         cursor: pointer !important;
     }
     
-    /* 🔴 ซ่อนปุ่มกลม (Radio Circle) เด็ดขาด 100% */
+    /* ซ่อนปุ่มกลม (Radio Circle) เด็ดขาด 100% */
     .st-key-main_nav label[data-baseweb="radio"] > div:first-child {
         display: none !important;
         width: 0 !important;
@@ -1355,6 +1358,25 @@ THEME_CSS = """
     .st-key-main_nav label[data-baseweb="radio"]:has(input:checked) p {
         color: #EAECEF !important;
     }
+
+    /* ---------- Order panel (Bitkub-style) ---------- */
+    .op-tabs { display:flex; gap:28px; border-bottom:1px solid #2b3139; margin-bottom:14px; }
+    .op-tab { font-size:1rem; font-weight:600; color:#848e9c; padding:8px 4px; }
+    .op-tab.active { color:#EAECEF; border-bottom:2px solid #0ecb81; margin-bottom:-1px; }
+    .op-row { display:flex; justify-content:space-between; font-size:.85rem; color:#848e9c; margin-bottom:6px; }
+    .op-row b { color:#0ecb81; font-weight:600; font-variant-numeric:tabular-nums; }
+    .op-row.mut b { color:#848e9c; font-weight:500; }
+    .op-ro { display:flex; justify-content:space-between; align-items:center; background:#181a20;
+             border:1px solid #2b3139; border-radius:6px; padding:12px 14px; margin:8px 0;
+             font-size:.88rem; color:#b7bdc6; }
+    .op-ro b { color:#EAECEF; font-variant-numeric:tabular-nums; }
+    .op-warn { color:#f6465d; font-size:.78rem; margin:2px 0 6px; }
+    .st-key-op_buy_btn button, .st-key-op_sell_btn button {
+        width:100% !important; padding:12px !important; font-weight:700 !important;
+        color:#fff !important; border:none !important; }
+    .st-key-op_buy_btn button  { background:#0ecb81 !important; }
+    .st-key-op_sell_btn button { background:#f6465d !important; }
+    .st-key-op_buy_btn button:disabled, .st-key-op_sell_btn button:disabled { opacity:.35 !important; }
 </style>
 """
 
@@ -2442,6 +2464,107 @@ def render_market_column_view(df: pd.DataFrame, mode: str, current_asset: str, u
                       on_click=_select_asset, args=(sym,))
 
 
+def _fmt_comma_val(v: float) -> str:
+    return f"{v:,.0f}" if abs(v - round(v)) < 1e-9 else f"{v:,.2f}"
+
+
+def _apply_pct(pct_key: str, target_key: str, base: float, kind: str) -> None:
+    """ปุ่ม 25/50/75/100% -> ใส่จำนวนในช่อง แล้วเคลียร์ตัวเลือกให้กดซ้ำได้"""
+    sel = st.session_state.get(pct_key)
+    if not sel:
+        return
+    p = int(str(sel).rstrip("%")) / 100.0
+    if kind == "buy":
+        st.session_state[target_key] = _fmt_comma_val(math.floor(base * p * 100) / 100)
+    else:
+        st.session_state[target_key] = math.floor(base * p * 1e8) / 1e8
+    st.session_state[pct_key] = None
+
+
+def _submit_order(sim, side, amount_thb, data, order_date, ctx) -> None:
+    steps, _rec = execute_order(sim, side, amount_thb, order_date,
+                                data.loc[order_date], ctx)
+    st.session_state.sim_steps = steps
+    valid_dates = data[data.index >= order_date].index
+    if len(valid_dates) > 1:
+        sim["current_date"] = pd.to_datetime(np.random.choice(valid_dates))
+    else:
+        sim["current_date"] = pd.to_datetime(data.index[-1])
+    st.rerun()
+
+
+def render_order_panel(cfg, sim, asset, mid_now, data, current_date_val, ctx) -> None:
+    fee = LOCAL_TRADING_FEE_PCT
+    quote_buy = mid_now * (1 + cfg["dealer_spread"])
+    quote_sell = mid_now * (1 - cfg["dealer_spread"])
+    cash = float(sim.get("customer_thb", 1_000_000.0))
+    coin_bal = float(sim.get("customer_coins", {}).get(asset, 0.0))
+    PCTS = ["25%", "50%", "75%", "100%"]
+
+    st.markdown(
+        '<div class="op-tabs"><span class="op-tab">ลิมิต</span>'
+        '<span class="op-tab active">มาร์เก็ต</span>'
+        '<span class="op-tab">สต็อปลิมิต</span></div>',
+        unsafe_allow_html=True)
+
+    c_buy, c_sell = st.columns(2, gap="large")
+
+    # ---------------- ฝั่งซื้อ ----------------
+    with c_buy:
+        st.markdown(
+            f'<div class="op-row"><span>คงเหลือ</span><b>{cash:,.2f} THB</b></div>'
+            f'<div class="op-row mut"><span>ค่าธรรมเนียม</span><b>{fee * 100:.2f}%</b></div>',
+            unsafe_allow_html=True)
+        buy_amt = comma_number_input("จำนวนที่ต้องจ่าย (THB)", value=500000,
+                                     min_value=0, key="op_buy_amt")
+        st.pills("สัดส่วนของเงินบาท", PCTS, key="op_pct_buy",
+                 label_visibility="collapsed", on_change=_apply_pct,
+                 args=("op_pct_buy", "op_buy_amt", cash, "buy"))
+        est_coins = buy_amt * (1 - fee) / quote_buy if quote_buy > 0 else 0.0
+        st.markdown(
+            f'<div class="op-ro"><span>ราคาต่อ {asset}</span><b>{quote_buy:,.2f} THB</b></div>'
+            f'<div class="op-ro"><span>{asset} จำนวนที่จะได้รับ</span>'
+            f'<b>≈ {est_coins:,.8f} {asset}</b></div>',
+            unsafe_allow_html=True)
+        over_cash = buy_amt > cash + 1e-9
+        if over_cash:
+            st.markdown('<div class="op-warn">ยอดเงินบาทในกระเป๋าไม่พอ</div>',
+                        unsafe_allow_html=True)
+        buy_clicked = st.button(f"ซื้อ (Buy) {asset}", key="op_buy_btn",
+                                disabled=(buy_amt <= 0 or over_cash), **WIDE)
+
+    # ---------------- ฝั่งขาย ----------------
+    with c_sell:
+        qty_key = f"op_sell_qty_{asset}"
+        st.session_state.setdefault(qty_key, 0.0)
+        st.markdown(
+            f'<div class="op-row"><span>คงเหลือ</span><b>{coin_bal:,.8f} {asset}</b></div>'
+            f'<div class="op-row mut"><span>ค่าธรรมเนียม</span><b>{fee * 100:.2f}%</b></div>',
+            unsafe_allow_html=True)
+        sell_qty = st.number_input(f"จำนวนที่ต้องขาย ({asset})", min_value=0.0,
+                                   format="%.8f", key=qty_key)
+        st.pills("สัดส่วนของเหรียญ", PCTS, key="op_pct_sell",
+                 label_visibility="collapsed", on_change=_apply_pct,
+                 args=("op_pct_sell", qty_key, coin_bal, "sell"))
+        net_thb = sell_qty * quote_sell * (1 - fee)
+        st.markdown(
+            f'<div class="op-ro"><span>ราคาต่อ {asset}</span><b>{quote_sell:,.2f} THB</b></div>'
+            f'<div class="op-ro"><span>THB จำนวนที่จะได้รับ</span>'
+            f'<b>≈ {net_thb:,.2f} THB</b></div>',
+            unsafe_allow_html=True)
+        over_coin = sell_qty > coin_bal + 1e-9
+        if over_coin:
+            st.markdown(f'<div class="op-warn">{asset} ในกระเป๋าไม่พอ</div>',
+                        unsafe_allow_html=True)
+        sell_clicked = st.button(f"ขาย (Sell) {asset}", key="op_sell_btn",
+                                 disabled=(sell_qty <= 0 or over_coin), **WIDE)
+
+    if buy_clicked:
+        _submit_order(sim, "buy", float(buy_amt), data, current_date_val, ctx)
+    elif sell_clicked:
+        _submit_order(sim, "sell", float(sell_qty * quote_sell), data, current_date_val, ctx)
+
+
 def render_tab3(cfg: dict[str, Any], data: pd.DataFrame, data_err: Optional[str],
                 price_lookup: Optional[dict[str, float]] = None,
                 market_df: Optional[pd.DataFrame] = None) -> None:
@@ -2538,145 +2661,48 @@ def render_tab3(cfg: dict[str, Any], data: pd.DataFrame, data_err: Optional[str]
     </div>"""
     st.markdown(top_bar_html, unsafe_allow_html=True)
 
-    # --- MAIN LAYOUT (Columns: Market Overview | Chart & Tabs | Order Entry) ---
-    col_left, col_center, col_right = st.columns([2.6, 5, 2.6], gap="small")
+    # --- MAIN LAYOUT: Market | Chart + Order Panel + Tabs ---
+    col_left, col_center = st.columns([2.6, 7.4], gap="small")
 
-    # --- LEFT COLUMN: Market Overview Tabs ---
     with col_left:
         st.markdown('<div style="font-size:1.15rem; font-weight:700; color:#EAECEF; margin-bottom:12px; display:flex; align-items:center; gap:8px;">🌍 ภาพรวมตลาด (Market)</div>', unsafe_allow_html=True)
-
         m_df = market_df if market_df is not None else pd.DataFrame()
-
         sub1, sub2, sub3, sub4 = st.tabs(["⭐", "ปริมาณ", "▲ เพิ่ม", "▼ ลด"])
+        for sub, mode in zip((sub1, sub2, sub3, sub4),
+                             ("favorite", "volume", "top_gain", "top_loss")):
+            with sub:
+                try:
+                    cont = st.container(height=480, border=False)
+                except Exception:
+                    cont = st.container()
+                with cont:
+                    render_market_column_view(m_df, mode, asset, usdthb_current)
 
-        with sub1:
-            try:
-                cont1 = st.container(height=480, border=False)
-            except Exception:
-                cont1 = st.container()
-            with cont1:
-                render_market_column_view(m_df, "favorite", asset, usdthb_current)
-        with sub2:
-            try:
-                cont2 = st.container(height=480, border=False)
-            except Exception:
-                cont2 = st.container()
-            with cont2:
-                render_market_column_view(m_df, "volume", asset, usdthb_current)
-        with sub3:
-            try:
-                cont3 = st.container(height=480, border=False)
-            except Exception:
-                cont3 = st.container()
-            with cont3:
-                render_market_column_view(m_df, "top_gain", asset, usdthb_current)
-        with sub4:
-            try:
-                cont4 = st.container(height=480, border=False)
-            except Exception:
-                cont4 = st.container()
-            with cont4:
-                render_market_column_view(m_df, "top_loss", asset, usdthb_current)
-
-    # --- CENTER COLUMN: Chart & Timeline ---
     with col_center:
-        st.markdown('<div class="ex-panel" style="padding:0; overflow:hidden; border:none; background:transparent;">', unsafe_allow_html=True)
         local_sym = TV_LOCAL_SYMBOL.get(asset, f"BITKUB:{asset}THB")
-        render_tradingview(local_sym, f"tv_center_{asset}", 460, studies=["MAExp@tv-basicstudies"])
-        st.markdown('</div>', unsafe_allow_html=True)
+        render_tradingview(local_sym, f"tv_center_{asset}", 460,
+                           studies=["MAExp@tv-basicstudies"])
 
-        st.markdown('<div style="margin-top:14px;"></div>', unsafe_allow_html=True)
-        t_route, t_ledger, t_wallet = st.tabs(["🚀 System Routing (ออเดอร์ล่าสุด)", "📒 สมุดออเดอร์ (Ledger)", "💼 Wallet & Capital"])
-
-        with t_route:
-            steps_now = st.session_state.get("sim_steps", [])
-            if not steps_now:
-                st.info("ยังไม่มีออเดอร์ — กดสั่งซื้อ/ขาย ด้านขวามือเพื่อดูระบบเดินงานทีละด่าน")
-            else:
-                render_timeline(steps_now)
-
-        with t_ledger:
-            if not sim["orders"]:
-                st.caption("ยังไม่มีข้อมูลการเทรด")
-            else:
-                led = pd.DataFrame(sim["orders"])
-                led.index = range(1, len(led) + 1)
-                st.dataframe(led.sort_index(ascending=False), height=240, use_container_width=True)
-
-        with t_wallet:
-            stock_thb_now = max(0.0, sim["inv_coins"].get(asset, 0.0)) * spot_usd_current * usdthb_current
-            fx_left = max(0.0, cfg["fx_limit_max"] - sim["fx_used_usd"])
-
-            c1, c2, c3 = st.columns(3)
-            with c1:
-                st.metric("สต็อกคงเหลือ (THB)", fmt_baht(stock_thb_now))
-                st.metric("เหรียญคงเหลือ", fmt_coin(sim["inv_coins"].get(asset, 0.0), asset))
-            with c2:
-                st.metric("Outbound FX ใช้ไป ($)", f"{sim['fx_used_usd']:,.0f}")
-                st.metric("FX โควตาคงเหลือ ($)", f"{fx_left:,.0f}")
-            with c3:
-                st.metric("กำไรสะสม Dealer (THB)", fmt_baht(sim["pnl_thb"], True))
-                st.metric("ออเดอร์ทั้งหมด", f"{len(sim['orders'])} รายการ")
-
-    # --- RIGHT COLUMN: Order Entry ---
-    with col_right:
         with st.container(border=True):
-            st.markdown("""<div class="oe-tabs">
-                <span class="oe-tab">ลิมิต</span>
-                <span class="oe-tab active">มาร์เก็ต</span>
-                <span class="oe-tab">สต็อปลิมิต</span>
-            </div>""", unsafe_allow_html=True)
+            render_order_panel(cfg, sim, asset, mid_now, data, current_date_val, ctx)
 
-            cash_balance = sim.get("customer_thb", 1000000.0)
-            coin_balance = sim["customer_coins"].get(asset, 0.0)
-
-            st.markdown(f"""<div class="oe-bal">
-                <span>คงเหลือ: <b style="color:#EAECEF;">{cash_balance:,.2f} THB</b></span>
-                <span><b style="color:#EAECEF;">{coin_balance:,.6f} {asset}</b></span>
-            </div>""", unsafe_allow_html=True)
-
-            order_side = st.radio("ฝั่ง", ["ซื้อ", "ขาย"], horizontal=True, label_visibility="collapsed", key="sim_side")
-            side_key = "buy" if order_side == "ซื้อ" else "sell"
-
-            order_amt = comma_number_input("จำนวนที่ต้องการจ่าย (THB)", value=500000, min_value=0, key="sim_amount")
-
-            quote_now = mid_now * (1 + cfg["dealer_spread"]) if side_key == "buy" else mid_now * (1 - cfg["dealer_spread"])
-            est_coins = order_amt * (1 - LOCAL_TRADING_FEE_PCT) / quote_now
-
-            st.markdown(f'<div style="color:#848e9c; font-size:0.8rem; margin: 8px 0 16px 0; background:#181a20; padding:10px; border-radius:4px; border:1px solid #2b3139;">ราคาประเมิน: <b style="color:#EAECEF;">{quote_now:,.2f} THB</b><br>จะได้รับ: <b style="color:#EAECEF;">≈ {est_coins:,.6f} {asset}</b></div>', unsafe_allow_html=True)
-
-            btn_label = f"ซื้อ (Buy) {asset}" if side_key == "buy" else f"ขาย (Sell) {asset}"
-            send = st.button(btn_label, key="sim_send", use_container_width=True)
-            # สีปุ่มตามฝั่ง (เขียว = ซื้อ / แดง = ขาย)
-            _btn_color = "#0ecb81" if side_key == "buy" else "#f6465d"
-            st.markdown(
-                f"<style>.st-key-sim_send button{{background:{_btn_color} !important;}}</style>",
-                unsafe_allow_html=True,
-            )
-
-            st.divider()
-
-            n_orders = st.number_input("จำนวนออเดอร์สุ่ม", value=20, min_value=1, step=10, key="sim_n")
-            seed = st.number_input("Random seed", value=42, step=1, key="sim_seed", label_visibility="collapsed")
-            run_batch = st.button("🎲 สุ่มออเดอร์ (Auto-Run)", key="sim_batch", use_container_width=True)
-            reset = st.button("♻️ ล้างระบบใหม่", key="sim_reset", use_container_width=True)
+        with st.expander("🎲 เครื่องมือจำลอง — สุ่มออเดอร์ / รีเซ็ต", expanded=False):
+            st.caption("สุ่มออเดอร์ = ลูกค้าคนอื่นในตลาด ไม่แตะกระเป๋าของคุณ · "
+                       "รีเซ็ตจะล้างทุกอย่างรวมถึงกระเป๋า")
+            b1, b2, b3 = st.columns(3)
+            n_orders = b1.number_input("จำนวนออเดอร์สุ่ม", value=20, min_value=1,
+                                       step=10, key="sim_n")
+            seed = b2.number_input("Random seed", value=42, step=1, key="sim_seed", label_visibility="collapsed")
+            run_batch = b3.button("🎲 สุ่มออเดอร์ (Auto-Run)", key="sim_batch", **WIDE)
+            reset = st.button("♻️ ล้างระบบใหม่", key="sim_reset", **WIDE)
 
         if reset:
             first_day = pd.to_datetime(data.index[0])
-            st.session_state.sim = sim_defaults(asset, first_day, data.loc[first_day, "Global_USD"], data.loc[first_day, "USDTHB"], target_stock_thb)
+            st.session_state.sim = sim_defaults(
+                asset, first_day, data.loc[first_day, "Global_USD"],
+                data.loc[first_day, "USDTHB"], target_stock_thb)
             st.session_state.sim_signature = signature
             st.session_state.sim_steps = []
-            st.rerun()
-
-        if send:
-            steps, _rec = execute_order(sim, side_key, float(order_amt), current_date_val, data.loc[current_date_val], ctx)
-            st.session_state.sim_steps = steps
-
-            valid_dates = data[data.index >= current_date_val].index
-            if len(valid_dates) > 1:
-                sim["current_date"] = pd.to_datetime(np.random.choice(valid_dates))
-            else:
-                sim["current_date"] = pd.to_datetime(data.index[-1])
             st.rerun()
 
         if run_batch:
@@ -2697,11 +2723,47 @@ def render_tab3(cfg: dict[str, Any], data: pd.DataFrame, data_err: Optional[str]
             for d in chosen_dates:
                 amt = float(rng.lognormal(mu, sigma))
                 s_ = "buy" if rng.random() < p_buy else "sell"
-                last_steps, _rec = execute_order(sim, s_, max(amt, MIN_TRADE_THB), d, data.loc[d], ctx)
+                last_steps, _rec = execute_order(
+                    sim, s_, max(amt, MIN_TRADE_THB), d, data.loc[d], ctx,
+                    affect_wallet=False)
 
             sim["current_date"] = pd.to_datetime(chosen_dates[-1])
             st.session_state.sim_steps = last_steps
             st.rerun()
+
+        st.markdown('<div style="margin-top:14px;"></div>', unsafe_allow_html=True)
+        t_route, t_ledger, t_wallet = st.tabs(
+            ["🚀 System Routing (ออเดอร์ล่าสุด)", "📒 สมุดออเดอร์ (Ledger)", "💼 Wallet & Capital"])
+
+        with t_route:
+            steps_now = st.session_state.get("sim_steps", [])
+            if not steps_now:
+                st.info("ยังไม่มีออเดอร์ — กดซื้อ/ขายด้านบนเพื่อดูระบบเดินงานทีละด่าน")
+            else:
+                render_timeline(steps_now)
+
+        with t_ledger:
+            if not sim["orders"]:
+                st.caption("ยังไม่มีข้อมูลการเทรด")
+            else:
+                led = pd.DataFrame(sim["orders"])
+                led.index = range(1, len(led) + 1)
+                st.dataframe(led.sort_index(ascending=False), height=240, **WIDE)
+
+        with t_wallet:
+            stock_thb_now = (max(0.0, sim["inv_coins"].get(asset, 0.0))
+                             * spot_usd_current * usdthb_current)
+            fx_left = max(0.0, cfg["fx_limit_max"] - sim["fx_used_usd"])
+            c1, c2, c3 = st.columns(3)
+            with c1:
+                st.metric("สต็อกคงเหลือ (THB)", fmt_baht(stock_thb_now))
+                st.metric("เหรียญคงเหลือ", fmt_coin(sim["inv_coins"].get(asset, 0.0), asset))
+            with c2:
+                st.metric("Outbound FX ใช้ไป ($)", f"{sim['fx_used_usd']:,.0f}")
+                st.metric("FX โควตาคงเหลือ ($)", f"{fx_left:,.0f}")
+            with c3:
+                st.metric("กำไรสะสม Dealer (THB)", fmt_baht(sim["pnl_thb"], True))
+                st.metric("ออเดอร์ทั้งหมด", f"{len(sim['orders'])} รายการ")
 
 # ---- 5.5 TAB 4 — WALLET ------------------------------------------------
 
