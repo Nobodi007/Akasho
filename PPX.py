@@ -20,6 +20,7 @@ UI ถูกเรียกใต้ `if __name__ == "__main__"` เท่าน
 
 MODEL_VERSION / CHANGELOG
 -------------------------
+v1.5.13             + แก้ไขระบบคลิกเลือกเหรียญ Tab 3 (ลบ _fragment, ปรับ ID กราฟไม่ให้ซ้ำ, เพิ่ม asset ใน signature เพื่อล้างสถานะ Simulator)
 v1.5.11             + แก้ Vol ผิดหน่วย (yfinance Volume ของคริปโตเป็น USD อยู่แล้ว ไม่ต้องคูณราคาอีก)
 v1.5.12             + ขยายพื้นที่คลิกของแถวเหรียญให้คลุมทั้งแถว (กว้าง+สูง 100%) คลิกตรงไหนก็เปลี่ยนเหรียญ/กราฟ/ข้อมูลทันที
 v1.5.10             + แก้ราคาซ้อนทับ (จัดราคา/% เป็นคอลัมน์ขวาซ้อน 2 บรรทัด, โลโก้ไม่ถูกบีบ) และแท็บ "ปริมาณ" แสดง Vol เป็นบาท
@@ -56,7 +57,7 @@ from typing import Any, Mapping, Optional
 import numpy as np
 import pandas as pd
 
-MODEL_VERSION = "1.5.12"
+MODEL_VERSION = "1.5.13"
 
 try:
     import yaml
@@ -516,7 +517,7 @@ def sim_defaults(asset_name: str, start_date_val: Any, spot_usd: float,
 def sim_config_signature(ctx: Mapping[str, Any], target_stock_thb: float,
                          start_date: Any, end_date: Any) -> tuple:
     keys = [
-        "local_premium", "spread", "hedge_fee",
+        "asset", "local_premium", "spread", "hedge_fee",
         "fx_limit", "slip_sens", "include_fee_rev",
         "wd_markup", "bank_type", "ktb_wd_fee", "ktb_fx_bps",
         "capital", "cex_margin", "cex_liquidity_thb", "liab",
@@ -1458,19 +1459,19 @@ def render_tv_panel(asset: str) -> None:
     global_sym = TV_GLOBAL_SYMBOL.get(asset, f"BINANCE:{asset}USDT")
 
     if tv_mode == "กระดานไทย (Bitkub)":
-        render_tradingview(local_sym, "tv_bt_local", 520,
+        render_tradingview(local_sym, f"tv_bt_local_{asset}", 520,
                            studies=["RSI@tv-basicstudies"])
     elif tv_mode == "กระดานโลก (Binance)":
-        render_tradingview(global_sym, "tv_bt_global", 520,
+        render_tradingview(global_sym, f"tv_bt_global_{asset}", 520,
                            studies=["RSI@tv-basicstudies"])
     else:
         g1, g2 = st.columns(2)
         with g1:
             st.caption(f"🇹🇭 ราคาจริงฝั่งไทย — `{local_sym}`")
-            render_tradingview(local_sym, "tv_cmp_local", 420)
+            render_tradingview(local_sym, f"tv_cmp_local_{asset}", 420)
         with g2:
             st.caption(f"🌐 ราคาโลก — `{global_sym}`")
-            render_tradingview(global_sym, "tv_cmp_global", 420)
+            render_tradingview(global_sym, f"tv_cmp_global_{asset}", 420)
 
 def get_coin_logo(symbol: str) -> str:
     return COIN_LOGOS.get(symbol, "https://cdn-icons-png.flaticon.com/512/1490/1490844.png")
@@ -2328,7 +2329,6 @@ def render_market_column_view(df: pd.DataFrame, mode: str, current_asset: str, u
                 st.rerun()   # full rerun เพื่อให้ sidebar/กราฟ/ข้อมูลเปลี่ยนตามเหรียญ
 
 
-@_fragment
 def render_tab3(cfg: dict[str, Any], data: pd.DataFrame, data_err: Optional[str],
                 price_lookup: Optional[dict[str, float]] = None,
                 market_df: Optional[pd.DataFrame] = None) -> None:
@@ -2464,7 +2464,7 @@ def render_tab3(cfg: dict[str, Any], data: pd.DataFrame, data_err: Optional[str]
     with col_center:
         st.markdown('<div class="ex-panel" style="padding:0; overflow:hidden; border:none; background:transparent;">', unsafe_allow_html=True)
         local_sym = TV_LOCAL_SYMBOL.get(asset, f"BITKUB:{asset}THB")
-        render_tradingview(local_sym, "tv_center", 460, studies=["MAExp@tv-basicstudies"])
+        render_tradingview(local_sym, f"tv_center_{asset}", 460, studies=["MAExp@tv-basicstudies"])
         st.markdown('</div>', unsafe_allow_html=True)
 
         st.markdown('<div style="margin-top:14px;"></div>', unsafe_allow_html=True)
