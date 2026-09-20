@@ -20,12 +20,11 @@ UI ถูกเรียกใต้ `if __name__ == "__main__"` เท่าน
 
 MODEL_VERSION / CHANGELOG
 -------------------------
-v1.5.30             + [UI/UX] เปลี่ยนระบบ Navigation แท็บหลักมาใช้ st.radio ตามคำแนะนำ (Claude's approach) เพื่อให้สลับหน้าจอได้ 100% ไร้บั๊ก JS Cache และซ่อนวงกลม Radio ด้วย CSS ให้หน้าตาเหมือนแท็บแบบเดิมเป๊ะ
-v1.5.26             + [FIX] อัปเดตระบบ Logo เป็น Base64 SVG + Multi-layer Background, ลบบั๊กหักเงินซ้ำ, กันกระเป๋าโดนล้าง
+v1.5.27             + [FIX] ใช้ Radio Button ทำระบบนำทางแทน Tabs เพื่อแก้ปัญหาเด้งเปลี่ยนหน้า 100%
+                      ปรับ Native Columns ใน Tab 4 แทนตาราง HTML เดิมเพื่อแก้ปัญหาคลิกไม่ติด
+v1.5.26             + [FIX] อัปเดตระบบ Logo เป็น Base64 SVG + Multi-layer Background
 v1.5.24             + [FEATURE] กดเหรียญใน Wallet Tab 4 แล้ววาร์ปไปหน้าเทรด (Exchange UI Simulator Tab 3)
 v1.5.23             + [UI] จัดระเบียบ Tab 4 (Wallet): ลบปุ่ม Header และวงเงินต่อวันออกให้ดูสะอาดขึ้น
-v1.5.20             + [FEATURE] เพิ่มระบบ "กระเป๋าเงิน" (Wallet Tab 4) สไตล์ Bitkub
-v1.5.18             + [FEATURE] เพิ่มกราฟราคา 3D แบบ Interactive ใน Tab 1
 """
 
 from __future__ import annotations
@@ -46,7 +45,7 @@ from typing import Any, Mapping, Optional
 import numpy as np
 import pandas as pd
 
-MODEL_VERSION = "1.5.30"
+MODEL_VERSION = "1.5.27"
 
 try:
     import yaml
@@ -1308,21 +1307,54 @@ THEME_CSS = """
     .wl-name { line-height: 1.2; color: #EAECEF; font-weight: 600; font-size: 0.9rem; }
     .wl-name span { font-size: 0.7rem; color: #848e9c; font-weight: 500; }
 
-    /* เมนูหลักหน้าตาเหมือนแท็บเดิม (st.radio key = main_nav) */
+    /* ---------- แปลง Main Navigation Radio ให้เป็น Tabs ตามรูป ---------- */
     .st-key-main_nav [role="radiogroup"] {
-        gap: 16px !important; flex-wrap: nowrap !important;
-        border-bottom: 1px solid #2b3139; padding-bottom: 0 !important;
+        gap: 16px !important; 
+        flex-wrap: nowrap !important;
+        border-bottom: 1px solid #2b3139 !important; 
+        padding-bottom: 0px !important; 
+        margin-bottom: 16px !important;
     }
-    .st-key-main_nav label {
-        height: 36px; margin: 0 0 -1px 0 !important; padding: 0 4px !important;
-        align-items: center; cursor: pointer;
-        border-bottom: 2px solid transparent; background: transparent !important;
+    
+    .st-key-main_nav label[data-baseweb="radio"] {
+        background: transparent !important; 
+        border: none !important;
+        padding: 0 4px 6px 4px !important; 
+        margin: 0 0 -1px 0 !important;
+        border-radius: 0 !important; 
+        border-bottom: 2px solid transparent !important;
+        align-items: center !important;
+        cursor: pointer !important;
     }
-    .st-key-main_nav label > div:first-of-type { display: none !important; }
-    .st-key-main_nav label p { font-weight: 600; color: #848e9c; }
-    .st-key-main_nav label:hover p { color: #EAECEF; }
-    .st-key-main_nav label:has(input:checked) { border-bottom: 2px solid #0ecb81; }
-    .st-key-main_nav label:has(input:checked) p { color: #EAECEF; }
+    
+    /* 🔴 ซ่อนปุ่มกลม (Radio Circle) เด็ดขาด 100% */
+    .st-key-main_nav label[data-baseweb="radio"] > div:first-child {
+        display: none !important;
+        width: 0 !important;
+        height: 0 !important;
+        opacity: 0 !important;
+    }
+    
+    /* ปรับแต่งข้อความเริ่มต้น (สีเทา) */
+    .st-key-main_nav label[data-baseweb="radio"] p {
+        font-weight: 600 !important; 
+        color: #848e9c !important; 
+        font-size: 0.95rem !important;
+        margin: 0 !important;
+    }
+    
+    /* Hover State (ข้อความสีแดงตอนเอาเมาส์ชี้แบบในรูป) */
+    .st-key-main_nav label[data-baseweb="radio"]:hover p {
+        color: #ff4b4b !important;
+    }
+    
+    /* Active State (เส้นใต้สีเขียว ข้อความสีขาว สำหรับแท็บที่ถูกเลือก) */
+    .st-key-main_nav label[data-baseweb="radio"]:has(input:checked) {
+        border-bottom: 2px solid #0ecb81 !important;
+    }
+    .st-key-main_nav label[data-baseweb="radio"]:has(input:checked) p {
+        color: #EAECEF !important;
+    }
 </style>
 """
 
@@ -2701,7 +2733,7 @@ def render_tab4(cfg: dict[str, Any], data: pd.DataFrame, market_df: pd.DataFrame
     total_usdt = total_thb / usdthb_current if usdthb_current > 0 else 0
     time_str = pd.Timestamp.now(tz="Asia/Bangkok").strftime("%H:%M:%S")
 
-    # Header
+    # Header (ไม่มีปุ่มฝาก/ถอน/ประวัติ ตามที่ร้องขอ)
     st.markdown(
         f'<div style="margin-bottom:20px;">'
         f'<h2 style="margin:0; color:#EAECEF; font-size:1.8rem;">กระเป๋าเงิน</h2>'
@@ -2741,7 +2773,7 @@ def render_tab4(cfg: dict[str, Any], data: pd.DataFrame, market_df: pd.DataFrame
         qty = cust_coins.get(sym, 0.0)
         price = price_thb_map.get(sym, 0.0)
         assets_to_show.append({"sym": sym, "qty": qty, "price": price, "val": qty * price})
-
+        
     WL = [2.2, 1.5, 1.5, 1.5, 1.3]
     with st.container(key="wl_table"):
         with st.container(key="wlhead"):
@@ -2751,21 +2783,17 @@ def render_tab4(cfg: dict[str, Any], data: pd.DataFrame, market_df: pd.DataFrame
             for col, txt, al in zip(hc, heads, aligns):
                 col.markdown(f'<div class="wl-h" style="text-align:{al}">{txt}</div>',
                              unsafe_allow_html=True)
-        
         for a in assets_to_show:
             sym = a["sym"]
             sub_name = COIN_NAMES.get(sym, "Thai Baht")
-            
             if hide_small and a["val"] < 1.0:
                 continue
             if search_q and search_q.lower() not in sym.lower() \
                     and search_q.lower() not in sub_name.lower():
                 continue
-                
             with st.container(key=f"wlrow_{sym}"):
                 c_ast, c_val, c_qty, c_pend, c_act = st.columns(
                     WL, vertical_alignment="center", gap="small")
-                
                 with c_ast:
                     c_ic, c_nm = st.columns([1, 6], vertical_alignment="center", gap="small")
                     c_ic.markdown(coin_icon_html(sym, 28), unsafe_allow_html=True)
@@ -2776,7 +2804,6 @@ def render_tab4(cfg: dict[str, Any], data: pd.DataFrame, market_df: pd.DataFrame
                         c_nm.button(f"{sym}  ·  {sub_name}", key=f"wlbtn_{sym}",
                                     type="tertiary", on_click=_go_to_exchange, args=(sym,),
                                     help=f"เปิดกราฟและหน้าเทรด {sym}")
-                
                 c_val.markdown(f'<div class="wl-cell">{a["val"]:,.2f}</div>', unsafe_allow_html=True)
                 c_qty.markdown(f'<div class="wl-cell">{a["qty"]:,.6f}</div>', unsafe_allow_html=True)
                 c_pend.markdown('<div class="wl-cell" style="color:#848e9c;">0.00</div>',
