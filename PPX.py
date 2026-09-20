@@ -20,10 +20,11 @@ UI ถูกเรียกใต้ `if __name__ == "__main__"` เท่าน
 
 MODEL_VERSION / CHANGELOG
 -------------------------
+v1.5.1              + แก้ไขรูปภาพเหรียญไม่แสดง (เปลี่ยน CDN เป็น jsdelivr cryptocurrency-icons)
+                      + เพิ่ม Custom CSS เต็มรูปแบบสำหรับ UI สไตล์ Pro Exchange 
 v1.5.0              + Redesign Tab 3 (Simulator) เป็นรูปแบบ Pro Exchange Trading Terminal
                       (มี Top Bar, Market List, Order Book จำลอง และ Order Entry Panel)
                       + ปรับใช้ Dark Theme ขั้นสูง (Deep Navy/Black)
-v1.4.0              เพิ่ม Market Overview (รายการโปรด/ปริมาณ/% เพิ่ม/% ลด) ไว้ใน Tab 1
 """
 
 from __future__ import annotations
@@ -43,7 +44,7 @@ from typing import Any, Mapping, Optional
 import numpy as np
 import pandas as pd
 
-MODEL_VERSION = "1.5.0"
+MODEL_VERSION = "1.5.1"
 
 try:
     import yaml
@@ -1173,6 +1174,30 @@ THEME_CSS = """
                padding-top:1rem; border-top:1px solid #2b3139; }
 
     /* Custom Exchange Simulator UI Styling */
+    .ex-header { display: flex; justify-content: space-between; align-items: center; background: #181a20; padding: 12px 24px; border-bottom: 1px solid #2b3139; margin-bottom: 16px; border-radius: 8px; }
+    .ex-stat { display: flex; flex-direction: column; }
+    .ex-stat-label { font-size: 0.75rem; color: #848e9c; }
+    .ex-stat-val { font-size: 0.9rem; font-weight: 600; color: #EAECEF; }
+    .ex-green { color: #0ecb81 !important; }
+    .ex-red { color: #f6465d !important; }
+
+    .mk-row { display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #2b3139; cursor: pointer; transition: background 0.2s; }
+    .mk-row:hover { background: #2b3139; }
+    .mk-coin { display: flex; align-items: center; gap: 8px; }
+    .mk-price { font-size: 0.85rem; font-weight: 600; color: #EAECEF; text-align: right; }
+    .mk-vol { font-size: 0.75rem; text-align: right; }
+
+    .ob-header { display: flex; justify-content: space-between; font-size: 0.75rem; color: #848e9c; margin-bottom: 8px; }
+    .ob-header span, .ob-row span { flex: 1; text-align: right; }
+    .ob-header span:first-child, .ob-row span:first-child { text-align: left; }
+    .ob-row { display: flex; justify-content: space-between; font-size: 0.8rem; padding: 2px 4px; font-family: monospace; }
+    .ob-mid { text-align: center; font-size: 1.2rem; font-weight: bold; margin: 10px 0; padding: 4px 0; border-top: 1px solid #2b3139; border-bottom: 1px solid #2b3139; }
+
+    .oe-tabs { display: flex; gap: 16px; border-bottom: 1px solid #2b3139; padding-bottom: 8px; margin-bottom: 16px; }
+    .oe-tab { font-size: 0.9rem; font-weight: 600; color: #848e9c; cursor: pointer; }
+    .oe-tab.active { color: #EAECEF; border-bottom: 2px solid #fcd535; padding-bottom: 6px; margin-bottom: -8px; }
+    .oe-bal { display: flex; justify-content: space-between; font-size: 0.8rem; color: #848e9c; margin-bottom: 16px; }
+
     button[data-testid="baseButton-secondary"]:has(div:contains("ซื้อ")) {
         background-color: #0ecb81 !important; color: white !important; border: none !important; width: 100% !important; font-weight: bold; padding: 12px !important;
     }
@@ -1220,8 +1245,7 @@ def comma_number_input(label, value, min_value=None, key=None, help=None):
         num = float(min_value)
     return num
 
-def colored_metric(label, display_value, raw_value=None, sub_text=None,
-                   font_size="1.5rem"):
+def colored_metric(label, display_value, raw_value=None, sub_text=None, font_size="1.5rem"):
     if raw_value is None:
         color = "#EAECEF"
     else:
@@ -1401,6 +1425,11 @@ def render_tv_panel(asset: str) -> None:
         with g2:
             st.caption(f"🌐 ราคาโลก — `{global_sym}`")
             render_tradingview(global_sym, "tv_cmp_global", 420)
+
+def get_coin_logo(symbol: str) -> str:
+    if symbol == "THB":
+        return "https://cdn-icons-png.flaticon.com/512/197/197583.png"
+    return f"https://cdn.jsdelivr.net/gh/atomiclabs/cryptocurrency-icons@1a63530be6e374711a8554f31b17e4cb92c25fa5/32/color/{symbol.lower()}.png"
 
 # =========================================================================
 # LAYER 4 — AUDIT TRAIL
@@ -2053,7 +2082,7 @@ def render_tab1(cfg: dict[str, Any], data: pd.DataFrame, data_err: Optional[str]
         orientation="v", measure=measures, x=wf_labels, y=wf_values,
         text=wf_text, textposition="outside",
         connector={"line": {"color": "#374151"}},
-        increasing={"marker": {"color": "#00D26A"}},
+        increasing={"marker": {"color": "#0ecb81"}},
         decreasing={"marker": {"color": "#f6465d"}},
         totals={"marker": {"color": "#3B82F6"}},
     ))
@@ -2409,6 +2438,11 @@ def render_tab2(cfg: dict[str, Any], data: pd.DataFrame, data_err: Optional[str]
 
 # ---- 5.4 TAB 3 — TIME-TRAVEL ORDER SIMULATOR ---------------------------
 
+def get_coin_logo(symbol: str) -> str:
+    if symbol == "THB":
+        return "https://cdn-icons-png.flaticon.com/512/197/197583.png"
+    return f"https://cdn.jsdelivr.net/gh/atomiclabs/cryptocurrency-icons@1a63530be6e374711a8554f31b17e4cb92c25fa5/32/color/{symbol.lower()}.png"
+
 def generate_orderbook_html(price: float, spread: float) -> str:
     html = '<div style="background:#181a20; border:1px solid #2b3139; border-radius:8px; padding:12px; height:100%;">'
     html += '<div style="color:#EAECEF; font-size:1rem; font-weight:600; margin-bottom:12px;">สมุดออเดอร์</div>'
@@ -2499,10 +2533,9 @@ def render_tab3(cfg: dict[str, Any], data: pd.DataFrame, data_err: Optional[str]
     low_24h = mid_now * 0.982
 
     # --- TOP HEADER BAR ---
-    top_bar_html = f"""
-    <div class="ex-header">
+    top_bar_html = f"""<div class="ex-header">
         <div style="display:flex; align-items:center; gap:12px;">
-            <img src="https://cryptologos.cc/logos/{asset.lower()}-{asset.lower()}-logo.png" onerror="this.src='https://cdn-icons-png.flaticon.com/512/1490/1490844.png'" style="width:40px; height:40px; border-radius:50%; background:white; padding:2px;">
+            <img src="{get_coin_logo(asset)}" onerror="this.src='https://cdn-icons-png.flaticon.com/512/1490/1490844.png'" style="width:40px; height:40px; border-radius:50%; background:white; padding:2px;">
             <div class="ex-stat">
                 <span style="font-size:1.4rem; font-weight:700; color:#EAECEF;">{asset}/THB</span>
                 <span style="font-size:0.8rem; font-weight:600;" class="ex-green">เปลี่ยน 24H +1.26%</span>
@@ -2513,8 +2546,7 @@ def render_tab3(cfg: dict[str, Any], data: pd.DataFrame, data_err: Optional[str]
         <div class="ex-stat"><span class="ex-stat-label">ต่ำสุด 24H (THB)</span><span class="ex-stat-val">{low_24h:,.2f}</span></div>
         <div class="ex-stat"><span class="ex-stat-label">ปริมาณ 24H (THB)</span><span class="ex-stat-val">{vol_24h_thb/1e6:,.2f}M</span></div>
         <div class="ex-stat"><span class="ex-stat-label">Time-Travel Date</span><span class="ex-stat-val" style="color:#fcd535;">{current_date_val.strftime('%Y-%m-%d')}</span></div>
-    </div>
-    """
+    </div>"""
     st.markdown(top_bar_html, unsafe_allow_html=True)
 
     # --- MAIN LAYOUT ---
@@ -2529,27 +2561,25 @@ def render_tab3(cfg: dict[str, Any], data: pd.DataFrame, data_err: Optional[str]
         market_html = '<div style="height: 600px; overflow-y: auto; padding-right: 4px;">'
         market_html += '<div style="display:flex; justify-content:space-between; font-size:0.75rem; color:#848e9c; margin-bottom:8px;"><span>สินทรัพย์</span><span>ราคาล่าสุด</span></div>'
         
-        coin_info = {
+        coin_info_dict = {
             "BTC": "Bitcoin", "ETH": "Ethereum", "USDT": "Tether", "SOL": "Solana",
             "DOGE": "Dogecoin", "ADA": "Cardano", "HBAR": "Hedera", "LINK": "Chainlink",
             "XLM": "Stellar", "XRP": "XRP", "USDC": "USD Coin", "PEPE": "Pepe"
         }
         
         for sym in SUPPORTED_ASSETS:
-            c_name = coin_info.get(sym, sym)
+            c_name = coin_info_dict.get(sym, sym)
             p_usd = price_lookup.get(sym, spot_usd_current if sym == asset else np.random.uniform(0.1, 100))
             p_thb = p_usd * usdthb_current
             change = np.random.uniform(-5, 5)
             c_class = "ex-green" if change >= 0 else "ex-red"
             sign = "+" if change >= 0 else ""
-            logo = f"https://cryptologos.cc/logos/{sym.lower()}-{sym.lower()}-logo.png"
             
             bg_style = "background-color: #2b3139; border-radius:4px; padding: 4px;" if sym == asset else "padding: 4px;"
             
-            market_html += f"""
-            <div class="mk-row" style="{bg_style}">
+            market_html += f"""<div class="mk-row" style="{bg_style}">
                 <div class="mk-coin">
-                    <img src="{logo}" onerror="this.src='https://cdn-icons-png.flaticon.com/512/1490/1490844.png'" style="width:20px; height:20px; border-radius:50%; background:white;">
+                    <img src="{get_coin_logo(sym)}" onerror="this.src='https://cdn-icons-png.flaticon.com/512/1490/1490844.png'" style="width:20px; height:20px; border-radius:50%; background:white;">
                     <div style="line-height:1.2;"><div>{sym}</div><div style="font-size:0.7rem; color:#848e9c; font-weight:normal;">{c_name}</div></div>
                 </div>
                 <div>
@@ -2607,23 +2637,19 @@ def render_tab3(cfg: dict[str, Any], data: pd.DataFrame, data_err: Optional[str]
         st.markdown('<div style="margin-top:16px;"></div>', unsafe_allow_html=True)
         
         with st.container(border=True):
-            st.markdown("""
-            <div class="oe-tabs">
+            st.markdown("""<div class="oe-tabs">
                 <span class="oe-tab">ลิมิต</span>
                 <span class="oe-tab active">มาร์เก็ต</span>
                 <span class="oe-tab">สต็อปลิมิต</span>
-            </div>
-            """, unsafe_allow_html=True)
+            </div>""", unsafe_allow_html=True)
 
             cash_balance = nc_snapshot(0, cfg["total_capital_thb"], cfg["cex_margin_thb"], cfg["liab_thb"], 0, 0, 0, 0, 0, 0)["cash"]
             coin_balance = sim["customer_coins"].get(asset, 0.0)
 
-            st.markdown(f"""
-            <div class="oe-bal">
+            st.markdown(f"""<div class="oe-bal">
                 <span>คงเหลือ: <b style="color:#EAECEF;">{cash_balance:,.0f} THB</b></span>
                 <span><b style="color:#EAECEF;">{coin_balance:,.6f} {asset}</b></span>
-            </div>
-            """, unsafe_allow_html=True)
+            </div>""", unsafe_allow_html=True)
 
             order_side = st.radio("ฝั่ง", ["ซื้อ", "ขาย"], horizontal=True, label_visibility="collapsed", key="sim_side")
             side_key = "buy" if order_side == "ซื้อ" else "sell"
