@@ -1697,6 +1697,36 @@ def read_audit_records(path: Optional[Path] = None, limit: Optional[int] = None)
                 continue
     return out[-limit:] if limit else out
 
+SIM_STATE_ENV_VAR = "XSPRING_SIM_STATE"
+
+def sim_state_path() -> Path:
+    return Path(os.environ.get(SIM_STATE_ENV_VAR) or (_HERE / "sim_state.json"))
+
+def save_sim_state(sim: Any, path: Optional[Path] = None) -> None:
+    if not isinstance(sim, dict):
+        return
+    p = Path(path) if path else sim_state_path()
+    tmp = p.with_suffix(".tmp")
+    tmp.write_text(json.dumps(_json_safe(sim), ensure_ascii=False), encoding="utf-8")
+    os.replace(tmp, p)   # เขียนไฟล์ชั่วคราวก่อนแล้วสลับ กันไฟล์พังถ้าถูกปิดกลางคัน
+
+def load_sim_state(path: Optional[Path] = None) -> Optional[dict[str, Any]]:
+    p = Path(path) if path else sim_state_path()
+    if not p.is_file():
+        return None
+    try:
+        d = json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(d, dict):
+        return None
+    if d.get("current_date"):
+        try:
+            d["current_date"] = pd.to_datetime(d["current_date"])
+        except (ValueError, TypeError):
+            d.pop("current_date", None)
+    return d
+
 def _current_actor() -> str:
     try:
         email = getattr(st.user, "email", None)
@@ -2708,23 +2738,16 @@ def render_tab3(cfg: dict[str, Any], data: pd.DataFrame, data_err: Optional[str]
     )
 
     signature = sim_config_signature(ctx, target_stock_thb, cfg["start_date"], cfg["end_date"])
-    need_reset = (("sim" not in st.session_state) or st.session_state.get("sim_signature") != signature)
 
-    if need_reset:
-        old_sim = st.session_state.get("sim")
+    if "sim" not in st.session_state:
         first_day = pd.to_datetime(data.index[-1])
-        new_sim = sim_defaults(asset, first_day, data.loc[first_day, "Global_USD"], data.loc[first_day, "USDTHB"], target_stock_thb)
-        if isinstance(old_sim, dict):
-            new_sim["customer_thb"] = old_sim.get("customer_thb", 1_000_000.0)
-            new_sim["customer_coins"] = dict(old_sim.get("customer_coins", {}))
-        st.session_state.sim = new_sim
-        st.session_state.sim_signature = signature
+        st.session_state.sim = sim_defaults(
+            asset, first_day, data.loc[first_day, "Global_USD"],
+            data.loc[first_day, "USDTHB"], target_stock_thb)
         st.session_state.sim_steps = []
 
-    current_date_val = pd.to_datetime(st.session_state.sim.get("current_date", data.index[-1]))
-    if current_date_val not in data.index:
-        current_date_val = pd.to_datetime(data.index[-1])
-        st.session_state.sim["current_date"] = current_date_val
+    current_date_val = pd.to_datetime(data.index[-1])   # ราคาปัจจุบันเสมอ
+    st.session_state.sim["current_date"] = current_date_val
 
     spot_usd_current = float(data.loc[current_date_val, "Global_USD"])
     usdthb_current = float(data.loc[current_date_val, "USDTHB"])
@@ -2806,7 +2829,7 @@ def render_tab3(cfg: dict[str, Any], data: pd.DataFrame, data_err: Optional[str]
             b1, b2, b3 = st.columns(3)
             n_orders = b1.number_input("จำนวนออเดอร์สุ่ม", value=20, min_value=1,
                                        step=10, key="sim_n")
-            seed = b2.number_input("Random seed", value=42, step=1, key="sim_seed")
+            seed = b2.number_input("Random seed", value=42, step=1, key="sim_seed", label_visibility="collapsed")
             run_batch = b3.button("🎲 สุ่มออเดอร์ (Auto-Run)", key="sim_batch", **WIDE)
             reset = st.button("♻️ ล้างระบบใหม่", key="sim_reset", **WIDE)
 
@@ -2860,6 +2883,8 @@ def render_tab3(cfg: dict[str, Any], data: pd.DataFrame, data_err: Optional[str]
                 st.caption("ยังไม่มีข้อมูลการเทรด")
             else:
                 led = pd.DataFrame(sim["orders"])
+                if st.checkbox(f"แสดงเฉพาะ {asset}", key="led_only_asset"):
+                    led = led[led["เหรียญ"] == asset]
                 led.index = range(1, len(led) + 1)
                 st.dataframe(led.sort_index(ascending=False), height=240, **WIDE)
 
@@ -2950,9 +2975,7 @@ def render_tab4(cfg: dict[str, Any], data: pd.DataFrame, market_df: pd.DataFrame
         return
 
     sim = st.session_state.get("sim", {})
-    current_date_val = pd.to_datetime(sim.get("current_date", data.index[0]))
-    if current_date_val not in data.index:
-        current_date_val = pd.to_datetime(data.index[0])
+    current_date_val = pd.to_datetime(data.index[-1])
 
     usdthb_current = float(data.loc[current_date_val, "USDTHB"])
     cust_thb = sim.get("customer_thb", 1000000.0)
@@ -3064,7 +3087,7 @@ def render_tab4(cfg: dict[str, Any], data: pd.DataFrame, market_df: pd.DataFrame
     if st.session_state.pop("open_deposit", False):
         deposit_dialog()
 
-def main() -> None:
+def _main_body() -> None:
     st.set_page_config(
         page_title="XSpring Dealer Suite",
         page_icon="\u267b\ufe0f",
@@ -3072,6 +3095,11 @@ def main() -> None:
         initial_sidebar_state="expanded",
     )
     st.markdown(THEME_CSS, unsafe_allow_html=True)
+
+    if "sim" not in st.session_state:
+        saved = load_sim_state()
+        if saved:
+            st.session_state["sim"] = saved
 
     cfg = build_sidebar()
 
@@ -3108,6 +3136,16 @@ def main() -> None:
         "ไม่ใช่เครื่องมือรับรอง compliance</div>",
         unsafe_allow_html=True,
     )
+
+def main() -> None:
+    try:
+        _main_body()
+    finally:
+        # finally ทำงานแม้มี st.rerun() ทำให้ทุกออเดอร์ถูกเซฟเสมอ
+        try:
+            save_sim_state(st.session_state.get("sim"))
+        except Exception:
+            pass
 
 if __name__ == "__main__":
     if not HAS_UI:
