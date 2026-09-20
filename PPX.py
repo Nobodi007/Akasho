@@ -20,6 +20,7 @@ UI ถูกเรียกใต้ `if __name__ == "__main__"` เท่าน
 
 MODEL_VERSION / CHANGELOG
 -------------------------
+v1.5.2              + ลบฟังก์ชัน Orderbook และเหรียญที่ไม่ได้รองรับโลโก้ออกเพื่อลดการประมวลผลเครื่อง
 v1.5.1              + แก้ไขรูปภาพเหรียญไม่แสดง (เปลี่ยน CDN เป็น jsdelivr cryptocurrency-icons)
                       + เพิ่ม Custom CSS เต็มรูปแบบสำหรับ UI สไตล์ Pro Exchange 
 v1.5.0              + Redesign Tab 3 (Simulator) เป็นรูปแบบ Pro Exchange Trading Terminal
@@ -44,7 +45,7 @@ from typing import Any, Mapping, Optional
 import numpy as np
 import pandas as pd
 
-MODEL_VERSION = "1.5.1"
+MODEL_VERSION = "1.5.2"
 
 try:
     import yaml
@@ -98,7 +99,6 @@ LOCAL_EXCHANGES = ["Bitkub"]
 
 SUPPORTED_ASSETS = [
     "BTC", "ETH", "SOL", "DOGE", "ADA", "HBAR", "LINK", "XLM", "XRP", "USDT", "USDC",
-    "ASTER", "LIT", "ZIG", "PEPE", "VVV", "ZAMA", "STRK",
 ]
 STABLECOINS = ["USDT", "USDC"]
 
@@ -1186,12 +1186,6 @@ THEME_CSS = """
     .mk-coin { display: flex; align-items: center; gap: 8px; }
     .mk-price { font-size: 0.85rem; font-weight: 600; color: #EAECEF; text-align: right; }
     .mk-vol { font-size: 0.75rem; text-align: right; }
-
-    .ob-header { display: flex; justify-content: space-between; font-size: 0.75rem; color: #848e9c; margin-bottom: 8px; }
-    .ob-header span, .ob-row span { flex: 1; text-align: right; }
-    .ob-header span:first-child, .ob-row span:first-child { text-align: left; }
-    .ob-row { display: flex; justify-content: space-between; font-size: 0.8rem; padding: 2px 4px; font-family: monospace; }
-    .ob-mid { text-align: center; font-size: 1.2rem; font-weight: bold; margin: 10px 0; padding: 4px 0; border-top: 1px solid #2b3139; border-bottom: 1px solid #2b3139; }
 
     .oe-tabs { display: flex; gap: 16px; border-bottom: 1px solid #2b3139; padding-bottom: 8px; margin-bottom: 16px; }
     .oe-tab { font-size: 0.9rem; font-weight: 600; color: #848e9c; cursor: pointer; }
@@ -2443,33 +2437,6 @@ def get_coin_logo(symbol: str) -> str:
         return "https://cdn-icons-png.flaticon.com/512/197/197583.png"
     return f"https://cdn.jsdelivr.net/gh/atomiclabs/cryptocurrency-icons@1a63530be6e374711a8554f31b17e4cb92c25fa5/32/color/{symbol.lower()}.png"
 
-def generate_orderbook_html(price: float, spread: float) -> str:
-    html = '<div style="background:#181a20; border:1px solid #2b3139; border-radius:8px; padding:12px; height:100%;">'
-    html += '<div style="color:#EAECEF; font-size:1rem; font-weight:600; margin-bottom:12px;">สมุดออเดอร์</div>'
-    html += '<div class="ob-header"><span>ราคา (THB)</span><span>จำนวน</span><span>รวม</span></div>'
-    
-    # Asks (Red)
-    for i in range(7, 0, -1):
-        p = price * (1 + spread + (i * 0.001))
-        v = np.random.uniform(0.01, 1.5)
-        t = p * v
-        depth = np.random.uniform(10, 80)
-        html += f'<div class="ob-row" style="background: linear-gradient(to left, rgba(246,70,93,0.15) {depth}%, transparent {depth}%);"><span class="ex-red">{p:,.2f}</span><span>{v:,.4f}</span><span>{t:,.0f}</span></div>'
-    
-    # Mid Price
-    html += f'<div class="ob-mid"><span class="ex-green">{price:,.2f}</span> <span style="color:#848e9c; font-size:0.8rem; font-weight:normal;">THB</span></div>'
-    
-    # Bids (Green)
-    for i in range(1, 8):
-        p = price * (1 - spread - (i * 0.001))
-        v = np.random.uniform(0.01, 1.5)
-        t = p * v
-        depth = np.random.uniform(10, 80)
-        html += f'<div class="ob-row" style="background: linear-gradient(to left, rgba(14,203,129,0.15) {depth}%, transparent {depth}%);"><span class="ex-green">{p:,.2f}</span><span>{v:,.4f}</span><span>{t:,.0f}</span></div>'
-    
-    html += '</div>'
-    return html
-
 @_fragment
 def render_tab3(cfg: dict[str, Any], data: pd.DataFrame, data_err: Optional[str],
                 price_lookup: Optional[dict[str, float]] = None) -> None:
@@ -2564,7 +2531,7 @@ def render_tab3(cfg: dict[str, Any], data: pd.DataFrame, data_err: Optional[str]
         coin_info_dict = {
             "BTC": "Bitcoin", "ETH": "Ethereum", "USDT": "Tether", "SOL": "Solana",
             "DOGE": "Dogecoin", "ADA": "Cardano", "HBAR": "Hedera", "LINK": "Chainlink",
-            "XLM": "Stellar", "XRP": "XRP", "USDC": "USD Coin", "PEPE": "Pepe"
+            "XLM": "Stellar", "XRP": "XRP", "USDC": "USD Coin"
         }
         
         for sym in SUPPORTED_ASSETS:
@@ -2630,12 +2597,8 @@ def render_tab3(cfg: dict[str, Any], data: pd.DataFrame, data_err: Optional[str]
                 st.metric("กำไรสะสม Dealer (THB)", fmt_baht(sim["pnl_thb"], True))
                 st.metric("ออเดอร์ทั้งหมด", f"{len(sim['orders'])} รายการ")
 
-    # --- RIGHT COLUMN: Orderbook & Order Entry ---
+    # --- RIGHT COLUMN: Order Entry (Removed Orderbook) ---
     with col_right:
-        st.markdown(generate_orderbook_html(mid_now, cfg["dealer_spread"]), unsafe_allow_html=True)
-        
-        st.markdown('<div style="margin-top:16px;"></div>', unsafe_allow_html=True)
-        
         with st.container(border=True):
             st.markdown("""<div class="oe-tabs">
                 <span class="oe-tab">ลิมิต</span>
