@@ -20,27 +20,17 @@ UI ถูกเรียกใต้ `if __name__ == "__main__"` เท่าน
 
 MODEL_VERSION / CHANGELOG
 -------------------------
-v1.5.13             + แก้บั๊กคลิกแถวเหรียญใน Market Overview ไม่ทำงาน (v1.5.9-v1.5.12 ใช้ปุ่มโปร่งใส
-                      วางทับด้วย CSS position:absolute ซึ่งพึ่งพา DOM/CSS class ของ Streamlit
-                      หลายชั้นเกินไปจนพื้นที่คลิกจริงไม่ตรงกับแถวที่มองเห็น)
-                      เปลี่ยนมาใช้ st.columns + st.button จริงแบบเต็มความกว้าง (native, ไม่มี CSS hack)
-                      ทำให้คลิกที่ไหนของปุ่มเหรียญก็เปลี่ยนเหรียญ/กราฟ/ข้อมูลได้แน่นอน
+v1.5.14             + แก้บั๊กกดแถวเหรียญแล้วไม่มีอะไรเกิดขึ้น (ปรับ CSS Overlay ให้คลุมมิดชิดขึ้น บังคับ pointer-events: none และนำ st.rerun ออกจากปุ่ม)
+v1.5.13             + แก้ไขระบบคลิกเลือกเหรียญ Tab 3 (ลบ _fragment, ปรับ ID กราฟไม่ให้ซ้ำ, เพิ่ม asset ใน signature เพื่อล้างสถานะ Simulator)
+v1.5.11             + แก้ Vol ผิดหน่วย (yfinance Volume ของคริปโตเป็น USD อยู่แล้ว ไม่ต้องคูณราคาอีก)
 v1.5.12             + ขยายพื้นที่คลิกของแถวเหรียญให้คลุมทั้งแถว (กว้าง+สูง 100%) คลิกตรงไหนก็เปลี่ยนเหรียญ/กราฟ/ข้อมูลทันที
 v1.5.10             + แก้ราคาซ้อนทับ (จัดราคา/% เป็นคอลัมน์ขวาซ้อน 2 บรรทัด, โลโก้ไม่ถูกบีบ) และแท็บ "ปริมาณ" แสดง Vol เป็นบาท
 v1.5.9              + แก้ดีไซน์รายการเหรียญ (Market) ให้เหมือน Bitkub: วาดทั้งแถวเป็น HTML
                       + ปุ่มดาว/ปุ่มเลือกเหรียญเป็นปุ่มโปร่งใสวางทับ โดยจับด้วย class `st-key-*`
-                        (เลิกใช้ :contains() ซึ่งไม่ใช่ CSS จริง และ data-testid เก่า)
                       + แถวที่เลือกเป็นสีเขียวแบบ Bitkub, ย่อชื่อแท็บย่อยไม่ให้มีลูกศรเลื่อน
                       + ปุ่มซื้อ/ขาย/สุ่มออเดอร์ ใช้ key + CSS แทน :contains()
                       + Header ใช้ % เปลี่ยนแปลง 24H จริงจาก market overview (เดิม hardcode)
-                      * ต้องใช้ Streamlit >= 1.39 (class st-key-*)
 v1.5.8              + รื้อระบบคลิกเหรียญ ซ่อนปุ่มเลือก 100% ให้คลิกที่แถวได้เลยโดยไม่ Reload หน้าเว็บ
-                      + เพิ่มปุ่มรูปดาว (★/☆) ให้กดเพื่อเพิ่ม/ลดรายการโปรดได้จากหน้ารายการเหรียญโดยตรง
-                      + อัปเดต CSS แท็บเมนู (Tabs) ให้มีขีดเส้นใต้สีเขียวสไตล์ Exchange
-v1.5.5              + แก้ไข TypeError ตอนเรียก render_tab1 ในฟังก์ชัน main
-v1.5.4              + ทำระบบ "คลิกเหรียญแล้วกราฟเปลี่ยนตาม"
-v1.5.3              + ย้าย Market Overview มาไว้ด้านซ้าย และแก้ไข CDN รูปภาพเหรียญทั้งหมด
-v1.5.2              + ลบฟังก์ชัน Orderbook และเหรียญที่ไม่ได้รองรับโลโก้ออกเพื่อลดการประมวลผลเครื่อง
 """
 
 from __future__ import annotations
@@ -60,7 +50,7 @@ from typing import Any, Mapping, Optional
 import numpy as np
 import pandas as pd
 
-MODEL_VERSION = "1.5.13"
+MODEL_VERSION = "1.5.14"
 
 try:
     import yaml
@@ -520,7 +510,7 @@ def sim_defaults(asset_name: str, start_date_val: Any, spot_usd: float,
 def sim_config_signature(ctx: Mapping[str, Any], target_stock_thb: float,
                          start_date: Any, end_date: Any) -> tuple:
     keys = [
-        "local_premium", "spread", "hedge_fee",
+        "asset", "local_premium", "spread", "hedge_fee",
         "fx_limit", "slip_sens", "include_fee_rev",
         "wd_markup", "bank_type", "ktb_wd_fee", "ktb_fx_bps",
         "capital", "cex_margin", "cex_liquidity_thb", "liab",
@@ -1230,33 +1220,55 @@ THEME_CSS = """
     .st-key-sim_send button { width: 100% !important; font-weight: 700; padding: 12px; color: #fff !important; border: none !important; }
     .st-key-sim_batch button { width: 100% !important; font-weight: 700; background: #fcd535 !important; color: #181a20 !important; border: none !important; }
 
-    /* ---------- Market list (native st.columns + st.button, no overlay hacks) ---------- */
-    .mk-head-native {
-        font-size: .72rem; color: #848e9c; padding: 4px 0 6px 0;
-    }
-    [class*="st-key-mkrow2_"] {
+    /* ---------- Market list (Bitkub style) ---------- */
+    [class*="st-key-mkrow_"] {
+        position: relative !important;
         border-bottom: 1px solid #1f2329;
-        padding: 2px 0;
+        cursor: pointer;
     }
-    [class*="st-key-mkrow2_"]:hover { background: #1c2027; }
-    [class*="st-key-favbtn_"] button {
-        background: transparent !important; border: none !important;
-        font-size: 1.1rem !important; padding: 2px !important; min-height: 0 !important;
-        color: #5e6673 !important;
+    [class*="st-key-mkrow_"]:hover { background: #2b3139; }
+    [class*="st-key-mkrow_"] > [data-testid="stVerticalBlock"] { gap: 0 !important; }
+
+    /* ปุ่มจริงถูกดึงออกจาก flow แล้วซ่อน วางทับแถว */
+    [class*="st-key-fav_"], [class*="st-key-sel_"] {
+        position: absolute !important;
+        top: 0 !important; bottom: 0 !important; margin: 0 !important; height: 100% !important;
     }
-    [class*="st-key-selbtn_"] button {
-        background: transparent !important; border: none !important;
-        text-align: left !important; justify-content: flex-start !important;
-        color: #EAECEF !important; font-weight: 600 !important; font-size: .85rem !important;
-        padding: 6px 4px !important;
+    [class*="st-key-fav_"] { left: 0; width: 36px; z-index: 10; }
+    [class*="st-key-sel_"] { left: 36px; right: 0; z-index: 9; }
+
+    /* ทำให้ overlay คลุมทั้งแถวจริง ๆ: กว้าง+สูง 100% ทุกชั้นของ wrapper ปุ่ม */
+    [class*="st-key-fav_"] *, [class*="st-key-sel_"] * {
+        width: 100% !important; height: 100% !important; margin: 0 !important; padding: 0 !important;
     }
-    [class*="st-key-selbtn_"] button:hover {
-        background: #2b3139 !important; border-radius: 4px;
+    [class*="st-key-fav_"] button, [class*="st-key-sel_"] button {
+        display: block !important; border: none !important; background: transparent !important;
+        color: transparent !important; opacity: 0 !important; cursor: pointer !important;
     }
-    .mk-price-native { font-weight: 700; color: #EAECEF; font-size: .88rem; line-height: 1.15;
+    
+    /* บังคับไม่ให้ข้อความดักจับการคลิก */
+    [class*="st-key-mkrow_"] .mk-row, [class*="st-key-mkrow_"] .mk-row * { 
+        pointer-events: none !important; 
+    }
+
+    .mk-head, .mk-row { display: flex; align-items: center; }
+    .mk-head { font-size: .72rem; color: #848e9c; padding: 6px 8px 6px 0; }
+    .mk-row { padding: 8px 8px 8px 0; }
+    .mk-star { width: 36px; flex-shrink: 0; text-align: center; font-size: 1.15rem; color: #5e6673; }
+    .mk-star.on { color: #fcd535; }
+    .mk-asset { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; }
+    .mk-asset img { width: 26px; height: 26px; min-width: 26px; flex-shrink: 0; border-radius: 50%; background: #181a20; object-fit: contain; }
+    .mk-asset > div { min-width: 0; }
+    .mk-sym { font-weight: 700; color: #EAECEF; font-size: .9rem; line-height: 1.15; white-space: nowrap; }
+    .mk-sym span { color: #848e9c; font-weight: 500; }
+    .mk-name { font-size: .68rem; color: #848e9c; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .mk-vol { color: #b7bdc6; }
+    .mk-right { flex-shrink: 0; margin-left: 8px; text-align: right; }
+    .mk-price { font-weight: 700; color: #EAECEF; font-size: .88rem; line-height: 1.15;
                 white-space: nowrap; font-variant-numeric: tabular-nums; }
-    .mk-pct-native { font-size: .75rem; font-weight: 600; white-space: nowrap;
+    .mk-pct { font-size: .75rem; font-weight: 600; white-space: nowrap;
               font-variant-numeric: tabular-nums; }
+    .mk-sel { background: #0a5c33 !important; }   /* แถวที่เลือก = เขียวแบบ Bitkub */
 </style>
 """
 
@@ -1440,19 +1452,19 @@ def render_tv_panel(asset: str) -> None:
     global_sym = TV_GLOBAL_SYMBOL.get(asset, f"BINANCE:{asset}USDT")
 
     if tv_mode == "กระดานไทย (Bitkub)":
-        render_tradingview(local_sym, "tv_bt_local", 520,
+        render_tradingview(local_sym, f"tv_bt_local_{asset}", 520,
                            studies=["RSI@tv-basicstudies"])
     elif tv_mode == "กระดานโลก (Binance)":
-        render_tradingview(global_sym, "tv_bt_global", 520,
+        render_tradingview(global_sym, f"tv_bt_global_{asset}", 520,
                            studies=["RSI@tv-basicstudies"])
     else:
         g1, g2 = st.columns(2)
         with g1:
             st.caption(f"🇹🇭 ราคาจริงฝั่งไทย — `{local_sym}`")
-            render_tradingview(local_sym, "tv_cmp_local", 420)
+            render_tradingview(local_sym, f"tv_cmp_local_{asset}", 420)
         with g2:
             st.caption(f"🌐 ราคาโลก — `{global_sym}`")
-            render_tradingview(global_sym, "tv_cmp_global", 420)
+            render_tradingview(global_sym, f"tv_cmp_global_{asset}", 420)
 
 def get_coin_logo(symbol: str) -> str:
     return COIN_LOGOS.get(symbol, "https://cdn-icons-png.flaticon.com/512/1490/1490844.png")
@@ -1700,7 +1712,7 @@ def build_sidebar() -> dict[str, Any]:
             hedge_fee_maker = st.number_input(
                 "ค่าธรรมเนียม Global CEX — Maker (%)", key="bt_hedge_fee_maker",
                 step=0.01,
-                help=("ค่าตั้งต้น = เท่า Taker จนกว่าจะตั้ง maker preset ใน config.yaml "
+                help=("ค่าตั้งต้น = เท่า Taker จนกว่าจะตั้ง maker presetใน config.yaml "
                       "หรือแก้ช่องนี้ตามเทียร์บัญชีจริง")) / 100
             maker_ratio = st.slider(
                 "สัดส่วน Hedge ที่ทำเป็น Maker / Limit (%)", 0, 100, 0,
@@ -2268,54 +2280,47 @@ def render_market_column_view(df: pd.DataFrame, mode: str, current_asset: str, u
     else:
         view = df
 
-    head_extra = " · ปริมาณ 24 ชม. (THB)" if mode == "volume" else ""
-    hh1, hh2, hh3 = st.columns([0.7, 3.3, 2.0])
-    with hh2:
-        st.markdown(f'<div class="mk-head-native">สินทรัพย์{head_extra}</div>', unsafe_allow_html=True)
-    with hh3:
-        st.markdown('<div class="mk-head-native" style="text-align:right;">ราคา (THB) / %</div>', unsafe_allow_html=True)
+    st.markdown(
+        '<div class="mk-head"><span style="width:36px"></span>'
+        '<span style="flex:1">สินทรัพย์'
+        + (' · ปริมาณ 24 ชม. (THB)' if mode == "volume" else '') +
+        '</span><span style="text-align:right">ราคา (THB) / %</span></div>',
+        unsafe_allow_html=True,
+    )
 
     for _, row in view.iterrows():
         sym = str(row["symbol"])
         p_thb = float(row["price_usd"]) * usdthb
         pct = float(row["pct_change"])
         p_str = f"{p_thb:,.2f}" if p_thb >= 1 else f"{p_thb:,.4f}"
-        color = "#0ecb81" if pct >= 0 else "#f6465d"
+        c_class = "ex-green" if pct >= 0 else "ex-red"
         star_on = sym in favs
-        is_sel = sym == current_asset
+        sel_cls = " mk-sel" if sym == current_asset else ""
         vol_thb = float(row["volume"]) * usdthb   # yfinance crypto: Volume เป็นมูลค่า USD อยู่แล้ว -> คูณเรทเป็นบาท
-        sub = f"Vol ฿{fmt_num(vol_thb)}" if mode == "volume" else COIN_NAMES.get(sym, sym)
+        if mode == "volume":
+            sub = f'<span class="mk-vol">Vol ฿{fmt_num(vol_thb)}</span>'
+        else:
+            sub = COIN_NAMES.get(sym, sym)
 
-        # แถวเหรียญแบบ native: ปุ่มดาว + ปุ่มเลือก (คลิกได้จริง ไม่ใช้ CSS overlay hack)
-        # กัน key ชนกันเวลาเหรียญเดียวกันโผล่ในหลายแท็บย่อย ด้วย mode ในคีย์อยู่แล้ว
-        row_key = f"mkrow2_{mode}_{sym}"
-        if is_sel:
-            st.markdown(
-                f"<style>.st-key-{row_key} {{ background:#0a5c33 !important; "
-                f"border-radius:4px; }}</style>",
-                unsafe_allow_html=True,
-            )
-        with st.container(key=row_key):
-            c_star, c_info, c_price = st.columns([0.7, 3.3, 2.0], vertical_alignment="center")
-            with c_star:
-                st.button("★" if star_on else "☆", key=f"favbtn_{mode}_{sym}",
-                          on_click=_toggle_fav, args=(sym,), help="เพิ่ม/ลดรายการโปรด")
-            with c_info:
-                if st.button(f"🪙 {sym}/THB", key=f"selbtn_{mode}_{sym}",
-                             on_click=_select_asset, args=(sym,),
-                             use_container_width=True, help=sub):
-                    st.rerun()  # full rerun เพื่อให้ sidebar/กราฟ/ข้อมูลเปลี่ยนตามเหรียญที่เลือกทันที
-            with c_price:
-                st.markdown(
-                    f"<div style='text-align:right;'>"
-                    f"<div class='mk-price-native'>{p_str}</div>"
-                    f"<div class='mk-pct-native' style='color:{color};'>"
-                    f"{'+' if pct >= 0 else ''}{pct:.2f}%</div></div>",
-                    unsafe_allow_html=True,
-                )
+        html = (
+            f'<div class="mk-row{sel_cls}">'
+            f'<div class="mk-star{" on" if star_on else ""}">{"★" if star_on else "☆"}</div>'
+            f'<div class="mk-asset"><img src="{get_coin_logo(sym)}">'
+            f'<div><div class="mk-sym">{sym}<span>/THB</span></div>'
+            f'<div class="mk-name">{sub}</div></div></div>'
+            f'<div class="mk-right"><div class="mk-price">{p_str}</div>'
+            f'<div class="mk-pct {c_class}">{"+" if pct >= 0 else ""}{pct:.2f}%</div></div>'
+            f'</div>'
+        )
+
+        with st.container(key=f"mkrow_{mode}_{sym}"):
+            st.markdown(html, unsafe_allow_html=True)
+            st.button("fav", key=f"fav_{mode}_{sym}",
+                      on_click=_toggle_fav, args=(sym,))
+            st.button("select", key=f"sel_{mode}_{sym}",
+                      on_click=_select_asset, args=(sym,))
 
 
-@_fragment
 def render_tab3(cfg: dict[str, Any], data: pd.DataFrame, data_err: Optional[str],
                 price_lookup: Optional[dict[str, float]] = None,
                 market_df: Optional[pd.DataFrame] = None) -> None:
@@ -2451,7 +2456,7 @@ def render_tab3(cfg: dict[str, Any], data: pd.DataFrame, data_err: Optional[str]
     with col_center:
         st.markdown('<div class="ex-panel" style="padding:0; overflow:hidden; border:none; background:transparent;">', unsafe_allow_html=True)
         local_sym = TV_LOCAL_SYMBOL.get(asset, f"BITKUB:{asset}THB")
-        render_tradingview(local_sym, "tv_center", 460, studies=["MAExp@tv-basicstudies"])
+        render_tradingview(local_sym, f"tv_center_{asset}", 460, studies=["MAExp@tv-basicstudies"])
         st.markdown('</div>', unsafe_allow_html=True)
 
         st.markdown('<div style="margin-top:14px;"></div>', unsafe_allow_html=True)
