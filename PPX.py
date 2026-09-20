@@ -20,11 +20,12 @@ UI ถูกเรียกใต้ `if __name__ == "__main__"` เท่าน
 
 MODEL_VERSION / CHANGELOG
 -------------------------
+v1.5.24             + [FEATURE] กดเหรียญใน Wallet Tab 4 แล้ววาร์ปไปหน้าเทรด (Exchange UI Simulator Tab 3) พร้อมเปลี่ยนกราฟอัตโนมัติ
+                    + [FIX] ซ่อมรูปโลโก้ LINK (Chainlink) ที่พังจากเว็บต้นทาง
 v1.5.23             + [UI] จัดระเบียบ Tab 4 (Wallet): ลบปุ่ม Header และวงเงินต่อวันออกให้ดูสะอาดขึ้น, แก้โลโก้ THB ให้เป็นธงชาติไทยที่ถูกต้อง
 v1.5.22             + [UI] อัปเดตหน้า Wallet: ลบไอคอน 👁️ ออกจากมูลค่าทั้งหมด
 v1.5.21             + [FIX] แก้ไขบั๊ก Streamlit เรนเดอร์ HTML ออกมาเป็นตัวอักษรดิบ
 v1.5.20             + [FEATURE] เพิ่มระบบ "กระเป๋าเงิน" (Wallet Tab 4) สไตล์ Bitkub
-v1.5.19             + [UI] ปรับกราฟ 3D ใน Tab 1 ให้เป็นจุด (Scatter) ไล่สีรุ้ง (Rainbow) แทนเส้น
 """
 
 from __future__ import annotations
@@ -44,7 +45,7 @@ from typing import Any, Mapping, Optional
 import numpy as np
 import pandas as pd
 
-MODEL_VERSION = "1.5.23"
+MODEL_VERSION = "1.5.24"
 
 try:
     import yaml
@@ -119,7 +120,7 @@ COIN_LOGOS = {
     "SOL": "https://assets.coingecko.com/coins/images/4128/small/solana.png",
     "ADA": "https://assets.coingecko.com/coins/images/975/small/cardano.png",
     "DOGE": "https://assets.coingecko.com/coins/images/5/small/dogecoin.png",
-    "LINK": "https://assets.coingecko.com/coins/images/877/small/chainlinknew-bg.png",
+    "LINK": "https://cryptologos.cc/logos/chainlink-link-logo.png",  # เปลี่ยนลิงก์ LINK ที่นี่
     "XRP": "https://assets.coingecko.com/coins/images/44/small/xrp-symbol-white-128.png",
     "XLM": "https://assets.coingecko.com/coins/images/100/small/Stellar_symbol_black_RGB.png",
     "HBAR": "https://assets.coingecko.com/coins/images/3688/small/hbar.png",
@@ -1279,11 +1280,30 @@ THEME_CSS = """
     .wl-box { background: #181a20; border: 1px solid #2b3139; border-radius: 8px; padding: 20px; }
     .wl-total-val { font-size: 2.2rem; font-weight: 700; color: #EAECEF; font-variant-numeric: tabular-nums; margin: 4px 0; }
     .wl-tbl-head { display: flex; padding: 12px 16px; border-bottom: 1px solid #2b3139; font-size: 0.75rem; color: #848e9c; }
-    .wl-tbl-row { display: flex; padding: 16px; border-bottom: 1px solid #1f2329; align-items: center; }
+    
+    /* CSS สำหรับแถวกระเป๋าเงินที่กดแล้ววาร์ปได้ */
+    [class*="st-key-wlrow_"] { position: relative !important; }
+    [class*="st-key-wlrow_"] > div[data-testid="stVerticalBlock"] { gap: 0 !important; padding: 0 !important; }
+    [class*="st-key-wlbtn_"] {
+        position: absolute !important;
+        top: 0 !important; left: 0 !important; right: 0 !important; bottom: 0 !important;
+        height: 100% !important; width: 100% !important; margin: 0 !important; z-index: 5 !important;
+    }
+    [class*="st-key-wlbtn_"] * {
+        width: 100% !important; height: 100% !important; margin: 0 !important; padding: 0 !important;
+    }
+    [class*="st-key-wlbtn_"] button {
+        display: block !important; border: none !important; background: transparent !important;
+        color: transparent !important; opacity: 0 !important; cursor: pointer !important;
+    }
+    .wl-tbl-row {
+        position: relative; z-index: 2; display: flex; padding: 16px; align-items: center;
+        border-bottom: 1px solid #1f2329; border-left: 1px solid #2b3139; border-right: 1px solid #2b3139; background: #181a20; pointer-events: none;
+    }
     .wl-tbl-row:hover { background: #2b3139; }
     .wl-col-ast { flex: 2; display: flex; align-items: center; gap: 12px; color: #EAECEF; font-weight: 600; font-size: 0.9rem; }
     .wl-col-val { flex: 1.5; text-align: right; color: #EAECEF; font-size: 0.85rem; font-variant-numeric: tabular-nums; }
-    .wl-col-act { flex: 1.5; text-align: right; display: flex; justify-content: flex-end; gap: 16px; font-size: 0.8rem; font-weight: 600; }
+    .wl-col-act { flex: 1.5; text-align: right; display: flex; justify-content: flex-end; gap: 16px; font-size: 0.8rem; font-weight: 600; pointer-events: auto; position: relative; z-index: 10; }
     .wl-act-link { color: #0ecb81; cursor: pointer; text-decoration: none; }
 </style>
 """
@@ -1484,6 +1504,14 @@ def render_tv_panel(asset: str) -> None:
 
 def get_coin_logo(symbol: str) -> str:
     return COIN_LOGOS.get(symbol, "https://cdn-icons-png.flaticon.com/512/1490/1490844.png")
+
+def _go_to_exchange(sym: str) -> None:
+    # โค้ดนี้จะถูกเรียกเมื่อคลิกที่เหรียญในหน้า Wallet Tab 4
+    # ตั้งค่าให้เปลี่ยนเหรียญใน Sidebar เป็นตัวที่คลิก
+    st.session_state["bt_asset"] = sym
+    # ระบุ Index ของ Tab ที่อยากให้เด้งไป (Exchange UI Simulator คือ Tab 3 มี index = 2)
+    st.session_state["force_tab_switch"] = 2
+
 
 # =========================================================================
 # LAYER 4 — AUDIT TRAIL
@@ -2672,7 +2700,7 @@ def render_tab4(cfg: dict[str, Any], data: pd.DataFrame, market_df: pd.DataFrame
     total_usdt = total_thb / usdthb_current if usdthb_current > 0 else 0
     time_str = pd.Timestamp.now(tz="Asia/Bangkok").strftime("%H:%M:%S")
 
-    # Header (ไม่มีปุ่มฝาก/ถอน/ประวัติ ตามที่ร้องขอ)
+    # Header
     st.markdown(
         f'<div style="margin-bottom:20px;">'
         f'<h2 style="margin:0; color:#EAECEF; font-size:1.8rem;">กระเป๋าเงิน</h2>'
@@ -2714,7 +2742,18 @@ def render_tab4(cfg: dict[str, Any], data: pd.DataFrame, market_df: pd.DataFrame
         val = qty * price
         assets_to_show.append({"sym": sym, "qty": qty, "price": price, "val": val})
 
-    html_rows = ""
+    st.markdown(
+        f'<div style="background:#181a20; border:1px solid #2b3139; border-top-left-radius:8px; border-top-right-radius:8px;">'
+        f'<div class="wl-tbl-head">'
+        f'<div style="flex:2;">สินทรัพย์ ↕</div>'
+        f'<div style="flex:1.5; text-align:right;">มูลค่าทั้งหมด ↕</div>'
+        f'<div style="flex:1.5; text-align:right;">จำนวนที่ใช้ได้ ↕</div>'
+        f'<div style="flex:1.5; text-align:right;">รอดำเนินการ ↕</div>'
+        f'<div style="flex:1.5;"></div>'
+        f'</div></div>',
+        unsafe_allow_html=True
+    )
+
     for a in assets_to_show:
         if hide_small and a["val"] < 1.0:
             continue
@@ -2724,7 +2763,7 @@ def render_tab4(cfg: dict[str, Any], data: pd.DataFrame, market_df: pd.DataFrame
         logo = get_coin_logo(a["sym"])
         sub_name = COIN_NAMES.get(a["sym"], "Thai Baht")
 
-        html_rows += (
+        row_html = (
             f'<div class="wl-tbl-row">'
             f'<div class="wl-col-ast">'
             f'<img src="{logo}" style="width:28px; height:28px; border-radius:50%; background:#181a20; padding:2px;">'
@@ -2737,26 +2776,21 @@ def render_tab4(cfg: dict[str, Any], data: pd.DataFrame, market_df: pd.DataFrame
             f'<div class="wl-col-val">{a["qty"]:,.6f}</div>'
             f'<div class="wl-col-val" style="color:#848e9c;">0.00</div>'
             f'<div class="wl-col-act">'
-            f'<span class="wl-act-link">ฝาก</span>'
-            f'<span class="wl-act-link">ถอน</span>'
+            f'<span class="wl-act-link">ฝาก</span> '
+            f'<span class="wl-act-link">ถอน</span> '
             f'<span style="color:#EAECEF; cursor:pointer;">•••</span>'
             f'</div>'
             f'</div>'
         )
 
-    st.markdown(
-        f'<div style="background:#181a20; border:1px solid #2b3139; border-radius:8px; overflow:hidden;">'
-        f'<div class="wl-tbl-head">'
-        f'<div style="flex:2;">สินทรัพย์ ↕</div>'
-        f'<div style="flex:1.5; text-align:right;">มูลค่าทั้งหมด ↕</div>'
-        f'<div style="flex:1.5; text-align:right;">จำนวนที่ใช้ได้ ↕</div>'
-        f'<div style="flex:1.5; text-align:right;">รอดำเนินการ ↕</div>'
-        f'<div style="flex:1.5;"></div>'
-        f'</div>'
-        f'{html_rows}'
-        f'</div>',
-        unsafe_allow_html=True
-    )
+        with st.container(key=f"wlrow_{a['sym']}"):
+            st.markdown(row_html, unsafe_allow_html=True)
+            if a["sym"] != "THB":
+                # กดที่เหรียญ (ปุ่มล่องหน) แล้วจะตั้งค่าเปลี่ยนเหรียญพร้อมสลับแท็บ
+                st.button("go", key=f"wlbtn_{a['sym']}", on_click=_go_to_exchange, args=(a["sym"],))
+
+    # ปิดขอบล่างของตาราง
+    st.markdown('<div style="border-top:1px solid #2b3139; margin-top:-1px;"></div>', unsafe_allow_html=True)
 
 
 def main() -> None:
@@ -2802,6 +2836,22 @@ def main() -> None:
         "ไม่ใช่เครื่องมือรับรอง compliance</div>",
         unsafe_allow_html=True,
     )
+
+    # -------------------------------------------------------------
+    # JS Injection: ระบบวาร์ปสลับแท็บจากการกดปุ่มในฝั่ง Python
+    # -------------------------------------------------------------
+    tab_idx = st.session_state.get("force_tab_switch")
+    if tab_idx is not None:
+        js = f"""
+        <script>
+        var tabs = window.parent.document.querySelectorAll('button[data-baseweb="tab"]');
+        if(tabs.length > {tab_idx}) {{
+            tabs[{tab_idx}].click();
+        }}
+        </script>
+        """
+        components.html(js, height=0, width=0)
+        st.session_state["force_tab_switch"] = None
 
 
 if __name__ == "__main__":
