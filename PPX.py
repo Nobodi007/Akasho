@@ -20,21 +20,23 @@ UI ถูกเรียกใต้ `if __name__ == "__main__"` เท่าน
 
 MODEL_VERSION / CHANGELOG
 -------------------------
-v1.5.27             + [FEATURE] เพิ่มระบบ Single-User Login (Email/Password) ผูกกับ secrets.toml
-                    + [FEATURE] หน้า Dashboard Back Office ดูพอร์ตและกราฟรวมทุกเหรียญ
+v1.5.27             + [FEATURE] หน้า Dashboard Back Office ดูพอร์ตและกราฟรวมทุกเหรียญ
                     + [FIX] แก้บั๊ก FX Limit ให้ตัดยอดรายเดือนอย่างถูกต้อง และอัปเดต Gauge อัตโนมัติ
                     + [UI] ปรับ UI แผงเทรดให้ความสูงเท่ากันเป๊ะ (Alignment) ทั้งฝั่งซื้อและขาย
                     + [FEATURE] ตรึงราคาในแผงออเดอร์ (15 วินาที) และใช้ st.fragment เพื่อรีเฟรชเฉพาะแผง
                     + [FEATURE] ระบบบันทึกรายการโปรด (Favorites) ลงไฟล์
                     + [FEATURE] ระบบสุ่มออเดอร์ข้ามหลายเหรียญพร้อมกัน (Multi-Asset Batch Run) แบบ Log-Uniform
                     + [FEATURE] เพิ่มระบบฝากเงินบาท (THB) แบบ Pop-up Dialog ในหน้า Wallet
+                    + [FIX] อัปเดตข้อมูลราคาวันปัจจุบัน, Limit Order แผงเทรด, และการสุ่มวันที่
+                      ใช้ Radio Button ทำระบบนำทางแทน Tabs เพื่อแก้ปัญหาเด้งเปลี่ยนหน้า 100%
+                      ปรับ Native Columns ใน Tab 4 แทนตาราง HTML เดิมเพื่อแก้ปัญหาคลิกไม่ติด
+v1.5.26             + [FIX] อัปเดตระบบ Logo เป็น Base64 SVG + Multi-layer Background
 """
 
 from __future__ import annotations
 
 import base64
 import hashlib
-import hmac
 import json
 import math
 import os
@@ -1760,42 +1762,7 @@ def load_favorites(path: Optional[Path] = None) -> list[str]:
         return []
     return [s for s in d if s in SUPPORTED_ASSETS] if isinstance(d, list) else []
 
-def _hash_pw(pw: str, salt: str) -> str:
-    return hashlib.pbkdf2_hmac("sha256", pw.encode(), salt.encode(), 200_000).hex()
-
-def _account() -> tuple[str, str, str]:
-    """คืน (email, salt, pw_hash) จาก st.secrets หรือ env"""
-    try:
-        s = st.secrets["account"]
-        return str(s["email"]), str(s["salt"]), str(s["pw_hash"])
-    except Exception:
-        return (os.environ.get("XSPRING_EMAIL", ""),
-                os.environ.get("XSPRING_SALT", ""),
-                os.environ.get("XSPRING_PW_HASH", ""))
-
-def require_login() -> bool:
-    if st.session_state.get("auth_email"):
-        return True
-    email, salt, pw_hash = _account()
-    st.markdown("## ♻️ XSpring Dealer Suite")
-    if not (email and salt and pw_hash):
-        st.error("ยังไม่ได้ตั้งบัญชี — กรุณาสร้าง .streamlit/secrets.toml หรือตั้ง Environment Variables")
-        return False
-    u = st.text_input("Email", key="login_email")
-    p = st.text_input("Password", type="password", key="login_pw")
-    if st.button("เข้าสู่ระบบ", type="primary"):
-        ok = (hmac.compare_digest(u.strip().lower(), email.lower())
-              and hmac.compare_digest(_hash_pw(p, salt), pw_hash))
-        if ok:
-            st.session_state["auth_email"] = email
-            st.rerun()
-        else:
-            st.error("Email หรือรหัสผ่านไม่ถูกต้อง")
-    return False
-
 def _current_actor() -> str:
-    if st.session_state.get("auth_email"):
-        return str(st.session_state["auth_email"])
     try:
         email = getattr(st.user, "email", None)
         if email:
@@ -3419,6 +3386,14 @@ def render_tab4(cfg: dict[str, Any], data: pd.DataFrame, market_df: pd.DataFrame
         deposit_dialog()
 
 def _main_body() -> None:
+    st.set_page_config(
+        page_title="XSpring Dealer Suite",
+        page_icon="\u267b\ufe0f",
+        layout="wide",
+        initial_sidebar_state="expanded",
+    )
+    st.markdown(THEME_CSS, unsafe_allow_html=True)
+
     if "sim" not in st.session_state:
         saved = load_sim_state()
         if saved:
@@ -3464,19 +3439,6 @@ def _main_body() -> None:
     )
 
 def main() -> None:
-    st.set_page_config(
-        page_title="XSpring Dealer Suite",
-        page_icon="\u267b\ufe0f",
-        layout="wide",
-        initial_sidebar_state="expanded",
-    )
-    if not require_login():
-        st.stop()
-    with st.sidebar:
-        st.caption(f"👤 {st.session_state['auth_email']}")
-        if st.button("ออกจากระบบ", key="logout_btn"):
-            st.session_state.pop("auth_email", None)
-            st.rerun()
     try:
         _main_body()
     finally:
