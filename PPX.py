@@ -20,7 +20,8 @@ UI ถูกเรียกใต้ `if __name__ == "__main__"` เท่าน
 
 MODEL_VERSION / CHANGELOG
 -------------------------
-v1.5.27             + [FEATURE] ระบบสุ่มออเดอร์ข้ามหลายเหรียญพร้อมกัน (Multi-Asset Batch Run) แบบ Log-Uniform
+v1.5.27             + [FEATURE] ระบบบันทึกรายการโปรด (Favorites) ลงไฟล์
+                    + [FEATURE] ระบบสุ่มออเดอร์ข้ามหลายเหรียญพร้อมกัน (Multi-Asset Batch Run) แบบ Log-Uniform
                     + [FEATURE] เพิ่มระบบฝากเงินบาท (THB) แบบ Pop-up Dialog ในหน้า Wallet
                     + [FIX] อัปเดตข้อมูลราคาวันปัจจุบัน, Limit Order แผงเทรด, และการสุ่มวันที่
                       ใช้ Radio Button ทำระบบนำทางแทน Tabs เพื่อแก้ปัญหาเด้งเปลี่ยนหน้า 100%
@@ -1728,6 +1729,28 @@ def load_sim_state(path: Optional[Path] = None) -> Optional[dict[str, Any]]:
             d.pop("current_date", None)
     return d
 
+FAV_STATE_ENV_VAR = "XSPRING_FAV_STATE"
+
+def fav_state_path() -> Path:
+    return Path(os.environ.get(FAV_STATE_ENV_VAR) or (_HERE / "favorites.json"))
+
+def save_favorites(favs: Any, path: Optional[Path] = None) -> None:
+    p = Path(path) if path else fav_state_path()
+    clean = [s for s in (favs or []) if s in SUPPORTED_ASSETS]
+    tmp = p.with_suffix(".tmp")
+    tmp.write_text(json.dumps(clean), encoding="utf-8")
+    os.replace(tmp, p)
+
+def load_favorites(path: Optional[Path] = None) -> list[str]:
+    p = Path(path) if path else fav_state_path()
+    if not p.is_file():
+        return []
+    try:
+        d = json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return []
+    return [s for s in d if s in SUPPORTED_ASSETS] if isinstance(d, list) else []
+
 def _current_actor() -> str:
     try:
         email = getattr(st.user, "email", None)
@@ -2478,7 +2501,10 @@ def _toggle_fav(sym: str) -> None:
     else:
         favs.append(sym)
     st.session_state["favorite_tickers"] = favs
-
+    try:
+        save_favorites(favs)
+    except OSError:
+        pass
 
 def _select_asset(sym: str) -> None:
     # ต้องเซ็ตใน callback เพราะ bt_asset เป็น key ของ selectbox ใน sidebar
@@ -2861,7 +2887,7 @@ def render_tab3(cfg: dict[str, Any], data: pd.DataFrame, data_err: Optional[str]
         <div class="ex-stat"><span class="ex-stat-label">ราคาล่าสุด (THB)</span><span class="ex-stat-val ex-green">{mid_now:,.2f}</span></div>
         <div class="ex-stat"><span class="ex-stat-label">สูงสุด 24H (THB)</span><span class="ex-stat-val">{high_24h:,.2f}</span></div>
         <div class="ex-stat"><span class="ex-stat-label">ต่ำสุด 24H (THB)</span><span class="ex-stat-val">{low_24h:,.2f}</span></div>
-        <div class="ex-stat"><span class="ex-stat-label">ปริมาณ 24H (THB)</span><span class="ex-stat-val">{vol_24h_thb/1e6:,.2f}M</span></div>
+        <div class="ex-stat"><span class="ex-stat-label">ปริมาณ 24H (THB)</span><span class="ex-stat-val">{fmt_num(vol_24h_thb)}</span></div>
         <div class="ex-stat"><span class="ex-stat-label">วันที่ (ปัจจุบัน)</span><span class="ex-stat-val" style="color:#fcd535;">{current_date_val.strftime('%Y-%m-%d')}</span></div>
     </div>"""
     st.markdown(top_bar_html, unsafe_allow_html=True)
@@ -2921,6 +2947,13 @@ def render_tab3(cfg: dict[str, Any], data: pd.DataFrame, data_err: Optional[str]
                 data.loc[first_day, "USDTHB"], target_stock_thb)
             st.session_state.sim_signature = signature
             st.session_state.sim_steps = []
+            
+            st.session_state["favorite_tickers"] = []
+            try:
+                save_favorites([])
+            except OSError:
+                pass
+                
             st.rerun()
 
         if run_batch:
@@ -3170,6 +3203,9 @@ def _main_body() -> None:
         saved = load_sim_state()
         if saved:
             st.session_state["sim"] = saved
+
+    if "favorite_tickers" not in st.session_state:
+        st.session_state["favorite_tickers"] = load_favorites()
 
     cfg = build_sidebar()
 
