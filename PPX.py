@@ -20,6 +20,7 @@ UI ถูกเรียกใต้ `if __name__ == "__main__"` เท่าน
 
 MODEL_VERSION / CHANGELOG
 -------------------------
+v1.5.10             + แก้ราคาซ้อนทับ (จัดราคา/% เป็นคอลัมน์ขวาซ้อน 2 บรรทัด, โลโก้ไม่ถูกบีบ) และแท็บ "ปริมาณ" แสดง Vol เป็นบาท
 v1.5.9              + แก้ดีไซน์รายการเหรียญ (Market) ให้เหมือน Bitkub: วาดทั้งแถวเป็น HTML
                       + ปุ่มดาว/ปุ่มเลือกเหรียญเป็นปุ่มโปร่งใสวางทับ โดยจับด้วย class `st-key-*`
                         (เลิกใช้ :contains() ซึ่งไม่ใช่ CSS จริง และ data-testid เก่า)
@@ -53,7 +54,7 @@ from typing import Any, Mapping, Optional
 import numpy as np
 import pandas as pd
 
-MODEL_VERSION = "1.5.9"
+MODEL_VERSION = "1.5.10"
 
 try:
     import yaml
@@ -1246,17 +1247,20 @@ THEME_CSS = """
 
     .mk-head, .mk-row { display: flex; align-items: center; }
     .mk-head { font-size: .72rem; color: #848e9c; padding: 6px 8px 6px 0; }
-    .mk-row { padding: 9px 8px 9px 0; }
-    .mk-star { width: 36px; text-align: center; font-size: 1.15rem; color: #5e6673; }
+    .mk-row { padding: 8px 8px 8px 0; }
+    .mk-star { width: 36px; flex-shrink: 0; text-align: center; font-size: 1.15rem; color: #5e6673; }
     .mk-star.on { color: #fcd535; }
-    .mk-asset { flex: 1; display: flex; align-items: center; gap: 8px; min-width: 0; }
-    .mk-asset img { width: 26px; height: 26px; border-radius: 50%; background: #181a20; }
-    .mk-sym { font-weight: 700; color: #EAECEF; font-size: .9rem; line-height: 1.15; }
+    .mk-asset { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; }
+    .mk-asset img { width: 26px; height: 26px; min-width: 26px; flex-shrink: 0; border-radius: 50%; background: #181a20; object-fit: contain; }
+    .mk-asset > div { min-width: 0; }
+    .mk-sym { font-weight: 700; color: #EAECEF; font-size: .9rem; line-height: 1.15; white-space: nowrap; }
     .mk-sym span { color: #848e9c; font-weight: 500; }
-    .mk-name { font-size: .68rem; color: #848e9c; }
-    .mk-price { width: 92px; text-align: right; font-weight: 700; color: #EAECEF;
-                font-size: .88rem; font-variant-numeric: tabular-nums; }
-    .mk-pct { width: 66px; text-align: right; font-size: .82rem; font-weight: 600;
+    .mk-name { font-size: .68rem; color: #848e9c; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .mk-vol { color: #b7bdc6; }
+    .mk-right { flex-shrink: 0; margin-left: 8px; text-align: right; }
+    .mk-price { font-weight: 700; color: #EAECEF; font-size: .88rem; line-height: 1.15;
+                white-space: nowrap; font-variant-numeric: tabular-nums; }
+    .mk-pct { font-size: .75rem; font-weight: 600; white-space: nowrap;
               font-variant-numeric: tabular-nums; }
     .mk-sel { background: #0a5c33 !important; }   /* แถวที่เลือก = เขียวแบบ Bitkub */
 </style>
@@ -2272,9 +2276,9 @@ def render_market_column_view(df: pd.DataFrame, mode: str, current_asset: str, u
 
     st.markdown(
         '<div class="mk-head"><span style="width:36px"></span>'
-        '<span style="flex:1">สินทรัพย์</span>'
-        '<span style="width:92px;text-align:right">ราคาล่าสุด</span>'
-        '<span style="width:66px;text-align:right">% 24 ชม.</span></div>',
+        '<span style="flex:1">สินทรัพย์'
+        + (' · ปริมาณ 24 ชม. (THB)' if mode == "volume" else '') +
+        '</span><span style="text-align:right">ราคา (THB) / %</span></div>',
         unsafe_allow_html=True,
     )
 
@@ -2286,15 +2290,20 @@ def render_market_column_view(df: pd.DataFrame, mode: str, current_asset: str, u
         c_class = "ex-green" if pct >= 0 else "ex-red"
         star_on = sym in favs
         sel_cls = " mk-sel" if sym == current_asset else ""
+        vol_thb = float(row["volume"]) * p_thb   # volume เป็นจำนวนเหรียญ -> แปลงเป็นบาท
+        if mode == "volume":
+            sub = f'<span class="mk-vol">Vol ฿{fmt_num(vol_thb)}</span>'
+        else:
+            sub = COIN_NAMES.get(sym, sym)
 
         html = (
             f'<div class="mk-row{sel_cls}">'
             f'<div class="mk-star{" on" if star_on else ""}">{"★" if star_on else "☆"}</div>'
             f'<div class="mk-asset"><img src="{get_coin_logo(sym)}">'
             f'<div><div class="mk-sym">{sym}<span>/THB</span></div>'
-            f'<div class="mk-name">{COIN_NAMES.get(sym, sym)}</div></div></div>'
-            f'<div class="mk-price">{p_str}</div>'
-            f'<div class="mk-pct {c_class}">{"+" if pct >= 0 else ""}{pct:.2f}%</div>'
+            f'<div class="mk-name">{sub}</div></div></div>'
+            f'<div class="mk-right"><div class="mk-price">{p_str}</div>'
+            f'<div class="mk-pct {c_class}">{"+" if pct >= 0 else ""}{pct:.2f}%</div></div>'
             f'</div>'
         )
 
