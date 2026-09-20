@@ -20,7 +20,8 @@ UI ถูกเรียกใต้ `if __name__ == "__main__"` เท่าน
 
 MODEL_VERSION / CHANGELOG
 -------------------------
-v1.5.27             + [FEATURE] เพิ่มระบบฝากเงินบาท (THB) แบบ Pop-up Dialog ในหน้า Wallet
+v1.5.27             + [FEATURE] ระบบสุ่มออเดอร์ข้ามหลายเหรียญพร้อมกัน (Multi-Asset Batch Run) แบบ Log-Uniform
+                    + [FEATURE] เพิ่มระบบฝากเงินบาท (THB) แบบ Pop-up Dialog ในหน้า Wallet
                     + [FIX] อัปเดตข้อมูลราคาวันปัจจุบัน, Limit Order แผงเทรด, และการสุ่มวันที่
                       ใช้ Radio Button ทำระบบนำทางแทน Tabs เพื่อแก้ปัญหาเด้งเปลี่ยนหน้า 100%
                       ปรับ Native Columns ใน Tab 4 แทนตาราง HTML เดิมเพื่อแก้ปัญหาคลิกไม่ติด
@@ -2601,6 +2602,73 @@ def check_open_orders(sim, quote_buy, quote_sell, data, order_date, ctx) -> None
         # hit แต่ยอดไม่พอ = ยกเลิกทิ้ง
     sim["open_orders"] = remaining
 
+def run_random_batch(sim, cfg, ctx, target_stock_thb, coins, n_orders, seed,
+                     amt_min, amt_max):
+    """สุ่มออเดอร์ข้ามหลายเหรียญ: สุ่มเหรียญ + วันที่ + ฝั่ง + ยอดเงิน (THB)
+    คืนค่า (steps ของออเดอร์สุดท้าย, จำนวนออเดอร์ต่อเหรียญ, เหรียญที่โหลดราคาไม่ได้)"""
+    rng = np.random.default_rng(int(seed))
+    lo = float(max(amt_min, MIN_TRADE_THB))
+    hi = float(max(amt_max, lo))
+    p_buy = 0.5 + cfg["net_bias_pct"] / 2.0
+    frames, skipped = {}, []
+    with st.spinner("กำลังโหลดราคาย้อนหลังของทุกเหรียญ…"):
+        for c in coins:
+            d, _err = fetch_price_data(c, cfg["start_date"], cfg["end_date"],
+                                       use_fx_proxy=cfg["use_fx_proxy"])
+            if d.empty:
+                skipped.append(c)
+            else:
+                frames[c] = d
+    if not frames:
+        return [], {}, skipped
+
+    # 1) วางแผนออเดอร์ทั้งหมดก่อน แล้วเรียงตามวันที่
+    names = list(frames)
+    plan = []
+    for _ in range(int(n_orders)):
+        c = names[int(rng.integers(len(names)))]
+        idx = frames[c].index
+        d = idx[int(rng.integers(len(idx)))]
+        # สุ่มแบบ log-uniform ระหว่าง min-max จะได้มีทั้งออเดอร์เล็กและใหญ่
+        amt = round(float(np.exp(rng.uniform(np.log(lo), np.log(hi)))), 2)
+        amt = max(amt, MIN_TRADE_THB)
+        side = "buy" if rng.random() < p_buy else "sell"
+        plan.append((d, c, side, amt))
+    plan.sort(key=lambda x: x[0])
+
+    # 2) เตรียม ctx และ inventory ต่อเหรียญ
+    coin_ctx = {}
+    for c, df_c in frames.items():
+        rp = risk_profile(df_c["Global_USD"])
+        h_c = (crypto_haircut(rp["es99"], cfg["settlement_days"])
+               if rp else ctx["h_crypto"])
+        h_x = (cfg["cex_counterparty_haircut"]
+               if cfg["cex_margin_asset"].startswith("Stablecoin") else h_c)
+        over = dict(asset=c, wd_fee_per_coin=WITHDRAWAL_FEE_TABLE.get(c, 0.0),
+                    h_crypto=h_c, h_cex=h_x)
+        if c in STABLECOINS:
+            over.update(slip_sens=0.0, market_depth_usd=0.0, impact_penalty=0.0)
+        coin_ctx[c] = {**ctx, **over}
+        if c not in sim["inv_coins"]:
+            last = df_c.iloc[-1]
+            px = float(last["Global_USD"] * last["USDTHB"])
+            sim["inv_coins"][c] = target_stock_thb / px if px > 0 else 0.0
+
+    # 3) ยิงออเดอร์ (ไม่แตะกระเป๋าของผู้ใช้)
+    saved_asset, saved_target = sim["asset"], sim["target_thb"]
+    counts, last_steps = {}, []
+    try:
+        for d, c, side, amt in plan:
+            sim["asset"] = c
+            sim["target_thb"] = target_stock_thb   # เหรียญละ 1 กอง target เท่ากัน
+            last_steps, _rec = execute_order(
+                sim, side, amt, d, frames[c].loc[d], coin_ctx[c],
+                affect_wallet=False)
+            counts[c] = counts.get(c, 0) + 1
+    finally:
+        sim["asset"], sim["target_thb"] = saved_asset, saved_target
+    return last_steps, counts, skipped
+
 
 def render_order_panel(cfg, sim, asset, mid_now, data, current_date_val, ctx) -> None:
     fee = LOCAL_TRADING_FEE_PCT
@@ -2825,13 +2893,26 @@ def render_tab3(cfg: dict[str, Any], data: pd.DataFrame, data_err: Optional[str]
 
         with st.expander("🎲 เครื่องมือจำลอง — สุ่มออเดอร์ / รีเซ็ต", expanded=False):
             st.caption("สุ่มออเดอร์ = ลูกค้าคนอื่นในตลาด ไม่แตะกระเป๋าของคุณ · "
+                       "สุ่มทั้งเหรียญ วันที่ ฝั่งซื้อ/ขาย และจำนวนเงิน · "
                        "รีเซ็ตจะล้างทุกอย่างรวมถึงกระเป๋า")
+            coins_pick = st.multiselect("เหรียญที่ให้สุ่ม", SUPPORTED_ASSETS,
+                                        default=SUPPORTED_ASSETS, key="sim_coins")
             b1, b2, b3 = st.columns(3)
             n_orders = b1.number_input("จำนวนออเดอร์สุ่ม", value=20, min_value=1,
                                        step=10, key="sim_n")
-            seed = b2.number_input("Random seed", value=42, step=1, key="sim_seed", label_visibility="collapsed")
+            seed = b2.number_input("Random seed", value=42, step=1, key="sim_seed")
             run_batch = b3.button("🎲 สุ่มออเดอร์ (Auto-Run)", key="sim_batch", **WIDE)
+            a1, a2 = st.columns(2)
+            amt_min = a1.number_input("ยอดต่ำสุด/ออเดอร์ (THB)", value=50.0,
+                                      min_value=float(MIN_TRADE_THB), step=50.0,
+                                      key="sim_amt_min")
+            amt_max = a2.number_input("ยอดสูงสุด/ออเดอร์ (THB)", value=100000.0,
+                                      min_value=float(MIN_TRADE_THB), step=1000.0,
+                                      key="sim_amt_max")
             reset = st.button("♻️ ล้างระบบใหม่", key="sim_reset", **WIDE)
+            summ = st.session_state.get("sim_batch_summary")
+            if summ:
+                st.caption(summ)
 
         if reset:
             first_day = pd.to_datetime(data.index[-1])
@@ -2843,29 +2924,18 @@ def render_tab3(cfg: dict[str, Any], data: pd.DataFrame, data_err: Optional[str]
             st.rerun()
 
         if run_batch:
-            rng = np.random.default_rng(int(seed))
-            mean_amt = cfg["daily_volume_thb"] / max(1, int(n_orders))
-            sigma = np.sqrt(np.log(1 + cfg["flow_cv_pct"] ** 2))
-            mu = np.log(max(mean_amt, 1.0)) - 0.5 * sigma ** 2
-            p_buy = 0.5 + cfg["net_bias_pct"] / 2.0
-            last_steps = []
-
-            valid_dates = data.index
-            if len(valid_dates) > 0:
-                picked = rng.choice(valid_dates, size=int(n_orders), replace=True)
-                chosen_dates = pd.to_datetime(sorted(picked))
+            if not coins_pick:
+                st.warning("เลือกอย่างน้อย 1 เหรียญ")
             else:
-                chosen_dates = [current_date_val] * int(n_orders)
-
-            for d in chosen_dates:
-                amt = float(rng.lognormal(mu, sigma))
-                s_ = "buy" if rng.random() < p_buy else "sell"
-                last_steps, _rec = execute_order(
-                    sim, s_, max(amt, MIN_TRADE_THB), d, data.loc[d], ctx,
-                    affect_wallet=False)
-
-            st.session_state.sim_steps = last_steps
-            st.rerun()
+                steps_, counts, skipped = run_random_batch(
+                    sim, cfg, ctx, target_stock_thb, coins_pick,
+                    n_orders, seed, amt_min, amt_max)
+                st.session_state.sim_steps = steps_
+                txt = "สุ่มแล้ว: " + ", ".join(f"{k} {v}" for k, v in sorted(counts.items()))
+                if skipped:
+                    txt += f" · โหลดราคาไม่ได้: {', '.join(skipped)}"
+                st.session_state.sim_batch_summary = txt
+                st.rerun()
 
         st.markdown('<div style="margin-top:14px;"></div>', unsafe_allow_html=True)
         t_route, t_ledger, t_wallet = st.tabs(
